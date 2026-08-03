@@ -1,0 +1,53 @@
+{
+  "name": "fcg-distribution-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:web": "vite",
+    "dev:server": "tsx watch server/index.ts",
+    "build": "tsc -b && tsc -p tsconfig.server.build.json && vite build",
+    "start": "node dist-server/server/index.js",
+    "start:source": "node --import tsx server/index.ts",
+    "db:migrate": "tsx scripts/db-migrate.ts",
+    "db:seed": "tsx scripts/db-seed.ts",
+    "db:reset": "tsx scripts/db-seed.ts --reset",
+    "db:inspect": "tsx scripts/db-inspect.ts",
+    "mock:integration": "tsx scripts/mock-integration.ts --reset",
+    "smoke:fcg": "tsx scripts/fcg-smoke.ts",
+    "smoke:prebook": "tsx scripts/fcg-prebook-smoke.ts",
+    "acceptance:glink": "tsx scripts/glink-acceptance.ts",
+    "acceptance:glink-app": "tsx scripts/glink-app-acceptance.ts",
+    "acceptance:flink-app": "tsx scripts/flink-app-acceptance.ts",
+    "acceptance:extended-scope": "tsx scripts/extended-scope-acceptance.ts",
+    "acceptance:flink-status": "tsx scripts/flink-order-status-once.ts",
+    "smoke:glink-webhook": "tsx scripts/glink-webhook-smoke.ts",
+    "test": "vitest run --exclude 'dist-server/**'",
+    "test:smoke": "vitest run tests/global-smoke.test.ts",
+    "test:integration": "vitest run tests/database.test.ts tests/mock-integration.test.ts",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^5.1.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.3",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "vitest": "^4.1.10"
+  }
+}

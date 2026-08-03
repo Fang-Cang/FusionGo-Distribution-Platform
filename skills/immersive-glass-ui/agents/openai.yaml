@@ -1,0 +1,4 @@
+interface:
+  display_name: "沉浸式玻璃 UI"
+  short_description: "生成深浅双主题、高质感且可访问的玻璃拟态界面规范与实现"
+  default_prompt: "使用 $immersive-glass-ui 设计并实现一个层次清晰、可访问的玻璃拟态界面。"
