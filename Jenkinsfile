@@ -1,45 +1,31 @@
 pipeline {
-//    agent any
-
-//    environment {
-//        // 定义镜像名称和标签
-//        IMAGE_NAME = 'fusiongo-distribution-platform'
-//        IMAGE_TAG = 'latest'
-//        // 定义 Docker Compose 项目名称
-//        COMPOSE_PROJECT_NAME = 'fusiongo'
-//    }
-    agent { label 'listfy-test' }
+    // 指定运行在名为 'listify-test' 的 SSH 节点上
+    agent { label 'listify-test' }
 
     environment {
+        // 根据你指定的项目名
         COMPOSE_PROJECT_NAME = 'fusiongo-distribution-platform'
-        // 由于远程节点环境变量不同，继续使用绝对路径以防万一
-        DOCKER_COMPOSE_CMD = '/data/obt' 
     }
 
     stages {
         stage('Checkout') {
             steps {
-                // 【核心修改】：使用 ws('你的绝对路径') 强制切换工作目录
-                // 注意：Jenkins 必须拥有这个目录的读写权限
-//                ws('/data/opt') { 
-//                    script {
-//                        echo "当前工作目录已切换到: ${pwd()}"
-                // 拉取代码
+                // 在 SSH 服务器上拉取代码
                 checkout scm
-                }
-//            }
+            }
         }
-//    }
 
         stage('Deploy with Docker Compose') {
             steps {
                 script {
-                    echo "开始使用 Docker Compose 部署..."
+                    echo "正在远程 SSH 服务器上执行部署..."
                     
-                    // 1. 停止并移除旧容器
+                    // 打印当前目录，方便排错
+                    sh "pwd"
+                    sh "ls -al"
+
+                    // 使用你指定的 V2 版命令格式：docker compose (中间是空格)
                     sh "docker compose -p ${COMPOSE_PROJECT_NAME} down || true"
-                    
-                    // 2. 重新构建并后台启动
                     sh "docker compose -p ${COMPOSE_PROJECT_NAME} up -d --build"
                 }
             }
@@ -51,7 +37,7 @@ pipeline {
             echo "✅ 构建并部署成功！服务已启动。"
         }
         failure {
-            echo "❌ 构建或部署失败，请检查 Jenkins 日志。"
+            echo "❌ 构建或部署失败，请检查 SSH 服务器上的 Jenkins 日志。"
         }
     }
-//}
+}
