@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  fusiongo-app:
+    build: .  # 基于当前目录的 Dockerfile 构建
+    image: fusiongo-distribution-platform:latest
+    container_name: fusiongo-app
+    restart: unless-stopped
+    ports:
+      - "8787:8787" # 映射到你的 ENV PORT=8787
+    environment:
+      - NODE_ENV=production
+      # 如果项目需要连接外部数据库，在这里补充环境变量，比如：
+      # - DATABASE_URL=postgresql://user:pass@host:5432/db
+    volumes:
+      # 【核心修改】：将宿主机的 ./data 目录，挂载到容器的 /data 目录
+      # 这样就算你删了容器重跑，之前 /data 里面生成的数据（比如日志、缓存）都还在
+      - ./app_data:/data
