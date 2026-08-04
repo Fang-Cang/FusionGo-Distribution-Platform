@@ -19,8 +19,10 @@ pipeline {
                         echo "当前工作目录已切换到: ${pwd()}"
                 // 拉取代码
                 checkout scm
+                }
             }
         }
+    }
 
         stage('Deploy with Docker Compose') {
             steps {
