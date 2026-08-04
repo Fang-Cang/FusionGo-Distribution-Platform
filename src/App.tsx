@@ -185,10 +185,10 @@ function Shell({
   const copy = shellCopy[locale];
   const consumerMode = ["hotels", "flights", "orders", "transactions", "account"].includes(page);
   const nav = [
-    { id: "dashboard" as Page, label: copy.nav.dashboard, shortLabel: copy.nav.dashboard, icon: LayoutDashboard },
     { id: "hotels" as Page, label: copy.nav.hotels, shortLabel: copy.nav.hotels, icon: BedDouble },
     { id: "flights" as Page, label: copy.nav.flights, shortLabel: copy.nav.flights, icon: Plane },
     { id: "orders" as Page, label: copy.nav.orders, shortLabel: copy.nav.orders, icon: TicketCheck },
+    { id: "dashboard" as Page, label: copy.nav.dashboard, shortLabel: copy.nav.dashboard, icon: LayoutDashboard },
     { id: "customers" as Page, label: copy.nav.customers, shortLabel: copy.nav.customers, icon: Users },
     { id: "pricing" as Page, label: copy.nav.pricing, shortLabel: copy.nav.pricing, icon: BadgePercent },
     { id: "finance" as Page, label: copy.nav.finance, shortLabel: copy.nav.finance, icon: WalletCards },
