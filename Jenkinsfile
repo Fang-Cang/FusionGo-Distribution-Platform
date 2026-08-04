@@ -54,4 +54,4 @@ pipeline {
             echo "❌ 构建或部署失败，请检查 Jenkins 日志。"
         }
     }
-}
+//}
