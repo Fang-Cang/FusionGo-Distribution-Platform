@@ -1,0 +1,6 @@
+FusionGo test environment full-stack rebuild trigger
+Requested: 2026-08-04
+Scope: frontend (src), backend (server), database migrations, and runtime image
+
+This tracked marker intentionally invalidates the Docker application source
+layer so the Jenkins test pipeline recompiles both dist and dist-server.
