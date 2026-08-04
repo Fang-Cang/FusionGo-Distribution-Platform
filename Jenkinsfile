@@ -27,7 +27,7 @@ pipeline {
                 // 拉取代码
                 checkout scm
                 }
-            }
+//            }
         }
     }
 
