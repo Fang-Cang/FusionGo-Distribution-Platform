@@ -12,6 +12,11 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
+                // 【核心修改】：使用 ws('你的绝对路径') 强制切换工作目录
+                // 注意：Jenkins 必须拥有这个目录的读写权限
+                ws('/data/my_custom_app') { 
+                    script {
+                        echo "当前工作目录已切换到: ${pwd()}"
                 // 拉取代码
                 checkout scm
             }
