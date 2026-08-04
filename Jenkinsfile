@@ -30,10 +30,10 @@ pipeline {
                     echo "开始使用 Docker Compose 部署..."
                     
                     // 1. 停止并移除旧容器
-                    sh "docker-compose -p ${COMPOSE_PROJECT_NAME} down || true"
+                    sh "docker compose -p ${COMPOSE_PROJECT_NAME} down || true"
                     
                     // 2. 重新构建并后台启动
-                    sh "docker-compose -p ${COMPOSE_PROJECT_NAME} up -d --build"
+                    sh "docker compose -p ${COMPOSE_PROJECT_NAME} up -d --build"
                 }
             }
         }
