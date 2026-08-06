@@ -8,16 +8,47 @@ services:
     restart: unless-stopped
     ports:
       - "8787:8787" # 映射到你的 ENV PORT=8787
-    # 关键修改：通过 env_file 注入 .env 中的 FCG 凭证与运行模式
-    # .env 文件由部署机本地维护，已被 .dockerignore / .gitignore 排除，不会进入镜像或仓库
+    # 可选：部署机本地 .env 会覆盖下面 environment 中的同名变量。
+    # 拿到 FCG 沙箱/生产真实凭证后，在项目根目录创建 .env（已被 .gitignore/.dockerignore 排除）
+    # 写入 FCG_APP_KEY / FCG_APP_SECRET，并把 FCG_SANDBOX_HOTEL_SIMULATION 置为 false，即可切换真实对接。
     env_file:
       - .env
     environment:
-      # NODE_ENV 保持 production，避免触发 NODE_ENV=test 的模拟数据兜底
+      # === 运行模式 ===
       - NODE_ENV=production
+      - FCG_MODE=sandbox
+      - FCG_ENV=sandbox
+      - FCG_BASE_URL=https://open.fusionconnectgroup.com
+      # 暂无真实凭证时，开启 sandbox 模拟兜底，使 UI 与预订流程可正常演示；
+      # 拿到真实凭证后请在 .env 中覆盖为 false。
+      - FCG_SANDBOX_HOTEL_SIMULATION=true
+      # === 基础配置 ===
+      - PORT=8787
+      - DATABASE_PATH=/data/fusiongo-sandbox.sqlite
+      # 本地兜底：32+ 位随机密钥；生产必须由密钥管理服务注入。
+      - PII_ENCRYPTION_KEY=sandbox-pii-encryption-key-32chars-min
+      # === 以下为生产准入项，sandbox 可留空 ===
+      - PUBLIC_APP_URL=
+      - WEBHOOK_PUBLIC_URL=
+      - CORS_ALLOWED_ORIGINS=
+      - AUTH_MODE=
+      - PRODUCTION_DATABASE_PERSISTENT=false
+      - PAYMENT_MODE=enterprise_credit
+      - PAYMENT_CARD_ENABLED=false
+      - PAYMENT_PSD2_SCA_ENABLED=false
+      - CUSTOMER_SUPPORT_URL=
+      - CUSTOMER_SUPPORT_EMAIL=
+      - CUSTOMER_SUPPORT_PHONE=
+      - ALLOW_FOREIGN_CURRENCY_CREDIT=false
+      - ORDER_MAINTENANCE_ENABLED=false
+      - ORDER_MAINTENANCE_INTERVAL_MINUTES=5
+      - UNPAID_ORDER_TIMEOUT_MINUTES=30
+      - ORDER_COMPENSATION_INTERVAL_MINUTES=15
+      - ORDER_MAINTENANCE_BATCH_SIZE=50
+      - MAINTENANCE_API_KEY=
       # 如果项目需要连接外部数据库，在这里补充环境变量，比如：
       # - DATABASE_URL=postgresql://user:pass@host:5432/db
     volumes:
-      # 【核心修改】：将宿主机的 ./app_data 目录，挂载到容器的 /data 目录
-      # 这样就算你删了容器重跑，之前 /data 里面生成的数据（比如日志、缓存）都还在
+      # 将宿主机的 ./app_data 目录挂载到容器的 /data 目录，
+      # 容器删除重建后 SQLite 数据仍然保留。
       - ./app_data:/data

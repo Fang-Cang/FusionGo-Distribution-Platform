@@ -2,10 +2,18 @@ import { describe, expect, it } from "vitest";
 import { isSupplierCommerceRequest, simulatedSupplierDataAllowed } from "../server/real-data-policy.js";
 
 describe("real supplier data policy", () => {
-  it("allows simulated supplier data only inside automated tests", () => {
+  it("allows simulated supplier data only inside automated tests or sandbox+simulation flag", () => {
     expect(simulatedSupplierDataAllowed("test")).toBe(true);
     expect(simulatedSupplierDataAllowed("development")).toBe(false);
     expect(simulatedSupplierDataAllowed("production")).toBe(false);
+    // sandbox 模式未开启模拟开关 -> 不允许
+    expect(simulatedSupplierDataAllowed("production", "sandbox", "false")).toBe(false);
+    expect(simulatedSupplierDataAllowed("production", "sandbox", undefined)).toBe(false);
+    // sandbox 模式显式开启模拟开关 -> 允许（用于部署机无真实凭证时兜底）
+    expect(simulatedSupplierDataAllowed("production", "sandbox", "true")).toBe(true);
+    // 非 sandbox 模式即使开了 flag 也不允许
+    expect(simulatedSupplierDataAllowed("production", "mock", "true")).toBe(false);
+    expect(simulatedSupplierDataAllowed("production", "production", "true")).toBe(false);
   });
 
   it("covers search, verification, order writes and after-sales reads", () => {

@@ -15,6 +15,25 @@ pipeline {
             }
         }
 
+        stage('Prepare env') {
+            steps {
+                script {
+                    // docker-compose.yml 声明了 env_file: - .env，若部署机未手动创建 .env，
+                    // docker compose 会直接报错；这里兜底创建一个空 .env，
+                    // 让容器使用 docker-compose.yml 中 environment 段的 sandbox 模拟默认值。
+                    // 后续拿到 FCG 真实凭证后，只需在该目录写入 .env 即可覆盖默认值，无需改代码。
+                    sh '''
+                        if [ ! -f .env ]; then
+                            touch .env
+                            echo "[deploy] .env 不存在，已创建空文件；容器将使用 docker-compose.yml 内置的 sandbox 模拟兜底配置。"
+                        else
+                            echo "[deploy] 已检测到部署机 .env，其变量将覆盖 docker-compose.yml 默认值。"
+                        fi
+                    '''
+                }
+            }
+        }
+
         stage('Deploy with Docker Compose') {
             steps {
                 script {
@@ -24,35 +43,26 @@ pipeline {
                     sh "pwd"
                     sh "ls -al"
 
-                    // 前置校验：docker-compose.yml 已通过 env_file 引用 .env，
-                    // 必须先在部署机项目目录创建 .env（含 FCG_MODE、FCG_APP_KEY、FCG_APP_SECRET 等），
-                    // 否则 compose 启动时会因缺少 env_file 直接失败
-                    if (!fileExists('.env')) {
-                        error """\
-【部署中止】当前目录未找到 .env 文件。
-docker-compose.yml 已通过 env_file: - .env 注入 FCG 凭证，请先在部署机项目根目录创建 .env：
-  FCG_MODE=sandbox
-  FCG_ENV=sandbox
-  FCG_BASE_URL=https://open.fusionconnectgroup.com
-  FCG_APP_KEY=<平台颁发的沙箱 AppKey>
-  FCG_APP_SECRET=<平台颁发的沙箱 AppSecret>
-  FCG_SANDBOX_HOTEL_SIMULATION=false
-  PII_ENCRYPTION_KEY=<32位以上随机字符串>
-  PORT=8787
-  DATABASE_PATH=/data/fusiongo-sandbox.sqlite
-.env 已被 .gitignore / .dockerignore 排除，不会进入仓库或镜像。"""
-                    }
-
-                    echo "✅ .env 已就绪，开始部署"
-
                     // 使用你指定的 V2 版命令格式：docker compose (中间是空格)
                     sh "docker compose -p ${COMPOSE_PROJECT_NAME} down || true"
                     sh "docker compose -p ${COMPOSE_PROJECT_NAME} up -d --build"
+
+                    // 部署后短暂等待服务启动，再输出健康检查结果便于定位
+                    sh '''
+                        sleep 5
+                        echo "=== 容器状态 ==="
+                        docker ps --filter name=fusiongo-app
+                        echo "=== /api/health ==="
+                        curl -s -o /dev/null -w "HTTP %{http_code}\\n" http://127.0.0.1:8787/api/health || echo "health endpoint not reachable yet"
+                        echo "=== /api/integration/status (mode & credentials) ==="
+                        curl -s http://127.0.0.1:8787/api/integration/status | head -c 400 || echo "integration status not reachable yet"
+                        echo ""
+                    '''
                 }
             }
         }
     }
-    
+
     post {
         success {
             echo "✅ 构建并部署成功！服务已启动。"
