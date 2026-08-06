@@ -12,7 +12,8 @@
 - 机票链路：搜索 → `priceKey` 验价 → 乘机人下单 → `orderNo` 支付 → 订单详情/取消。
 - 已完成经营工作台、酒店/机票完整预订页、订单、交易和账户设置。
 - 已建立 PostgreSQL 生产基线，并实现 SQLite 本地持久化数据库、迁移和测试种子。
-- 模拟环境强制执行酒店验房、机票 `priceKey` 验价、支付和状态流转。
+- 自动化测试环境可执行隔离的本地流程模拟；开发、Sandbox 和生产运行时均禁止用模拟商品或订单代替 G-Link/F-Link 真实结果。
+- 已实现酒店预订确认凭证、电子付款凭证和机票行程凭证 PDF，只从真实订单快照与供应商订单号取数。
 - 当前默认使用 Mock 模式；填入沙箱凭证后进入真实接口联调阶段。
 
 ## 文档
@@ -58,11 +59,12 @@ npm start
 
 ## FCG 接入模式
 
-默认 `FCG_MODE=mock`，无需凭证即可体验界面与本地订单流程。
+默认 `FCG_MODE=mock` 仅供启动非交易界面。酒店、机票搜索及下单接口会返回 `REAL_SUPPLIER_DATA_REQUIRED`；需配置 G-Link/F-Link 凭证并使用 `sandbox` 或 `production` 模式才能进行真实交易流程。
 
-`FCG_MODE=sandbox` 默认只接受 G-Link 真实映射酒店与实时库存。只有显式设置
-`FCG_SANDBOX_HOTEL_SIMULATION=true` 才会启用带有醒目标识的本地演示房态；这类订单不会向
-G-Link 创建订单，不能作为接口验收结果。生产环境始终禁止该降级。
+`FCG_MODE=sandbox` 只接受 G-Link/F-Link 真实映射产品、实时库存和真实供应商订单。
+`FCG_SANDBOX_HOTEL_SIMULATION` 在非自动化测试运行时不会启用任何模拟房态；开发、Sandbox 和生产均不使用模拟订单降级。
+
+电子凭证默认使用随依赖安装的 Noto Sans SC 生成 A4 PDF。如部署环境要求使用企业字体，可配置 `PDF_CJK_FONT_PATH`；TTC 字体可同时配置 `PDF_CJK_FONT_FAMILY` 和 `PDF_CJK_FONT_MEDIUM_FAMILY`。
 
 默认数据库位于 `.data/fusiongo-<FCG_ENV>.sqlite`，服务启动时自动迁移并幂等初始化测试数据。
 

@@ -1,10 +1,11 @@
-import { createCipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
+import { createCipheriv, createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type {
   DistributionOrder,
   FlightOffer,
+  FavoriteHotel,
   HotelOffer,
   OrderStatus,
   ProductType,
@@ -28,6 +29,11 @@ const migration003 = readFileSync(migrationUrl("003_business_operations.sql"), "
 const migration004 = readFileSync(migrationUrl("004_ledger_backfill.sql"), "utf8");
 const migration005 = readFileSync(migrationUrl("005_account_profile.sql"), "utf8");
 const migration006 = readFileSync(migrationUrl("006_account_preferences.sql"), "utf8");
+const migration007 = readFileSync(migrationUrl("007_remove_demo_supplier_data.sql"), "utf8");
+const migration008 = readFileSync(migrationUrl("008_remove_historical_simulated_orders.sql"), "utf8");
+const migration009 = readFileSync(migrationUrl("009_split_person_names.sql"), "utf8");
+const migration010 = readFileSync(migrationUrl("010_hotel_favorites.sql"), "utf8");
+const migration011 = readFileSync(migrationUrl("011_local_user_auth.sql"), "utf8");
 
 type SqlValue = string | number | bigint | null | Uint8Array;
 type SqlParams = SqlValue[];
@@ -147,6 +153,8 @@ export interface Customer {
   id: string;
   name: string;
   contactName: string;
+  contactSurname?: string;
+  contactGivenName?: string;
   phone: string;
   email: string;
   status: "ACTIVE" | "SUSPENDED";
@@ -180,6 +188,8 @@ export interface LedgerEntry {
 export interface AccountProfile {
   id: string;
   name: string;
+  surname?: string;
+  givenName?: string;
   language: "zh-CN" | "zh-TW" | "en";
   phone: string;
   email: string;
@@ -211,6 +221,20 @@ export interface NotificationPreferences {
 }
 
 const nowIso = () => new Date().toISOString();
+const normalizeEmail = (value: string) => value.trim().toLowerCase();
+const hashPassword = (password: string) => {
+  const salt = randomBytes(16);
+  const derived = scryptSync(password, salt, 64);
+  return `scrypt$${salt.toString("base64")}$${derived.toString("base64")}`;
+};
+const verifyPassword = (password: string, encoded: string) => {
+  const [algorithm, saltValue, hashValue] = encoded.split("$");
+  if (algorithm !== "scrypt" || !saltValue || !hashValue) return false;
+  const expected = Buffer.from(hashValue, "base64");
+  const actual = scryptSync(password, Buffer.from(saltValue, "base64"), expected.length);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+};
+const hashSessionToken = (token: string) => createHash("sha256").update(token).digest("hex");
 const localPiiSecret = process.env.PII_ENCRYPTION_KEY
   || "fusiongo-local-development-only-not-for-production";
 const localPiiKey = createHash("sha256").update(localPiiSecret).digest();
@@ -256,6 +280,7 @@ const mapOrder = (row: OrderRow): DistributionOrder => ({
   currency: row.currency,
   status: row.status,
   createdAt: displayTime(row.created_at),
+  createdAtIso: row.created_at,
 });
 
 const mapHotel = (row: HotelRow): HotelOffer => ({
@@ -336,6 +361,11 @@ export class FusionDatabase {
       { version: 4, name: "004_ledger_backfill", sql: migration004 },
       { version: 5, name: "005_account_profile", sql: migration005 },
       { version: 6, name: "006_account_preferences", sql: migration006 },
+      { version: 7, name: "007_remove_demo_supplier_data", sql: migration007 },
+      { version: 8, name: "008_remove_historical_simulated_orders", sql: migration008 },
+      { version: 9, name: "009_split_person_names", sql: migration009 },
+      { version: 10, name: "010_hotel_favorites", sql: migration010 },
+      { version: 11, name: "011_local_user_auth", sql: migration011 },
     ];
     migrations.forEach(migration => {
       const current = this.db.prepare(
@@ -351,7 +381,7 @@ export class FusionDatabase {
     });
   }
 
-  seed() {
+  seed(includeDemoSupplierData = process.env.NODE_ENV === "test") {
     const createdAt = nowIso();
     this.transaction(() => {
       this.db.prepare(`
@@ -363,7 +393,7 @@ export class FusionDatabase {
         INSERT OR IGNORE INTO user_profiles(
           id, tenant_id, name, language, phone, email,
           avatar_blob, avatar_mime, avatar_updated_at, created_at, updated_at
-        ) VALUES ('user-demo', ?, '林嘉诚', 'zh-CN', '13800008866',
+        ) VALUES ('user-demo', ?, '林嘉诚', 'en', '13800008866',
           'lin@example.com', NULL, NULL, NULL, ?, ?)
       `).run(DEFAULT_TENANT_ID, createdAt, createdAt);
 
@@ -395,14 +425,14 @@ export class FusionDatabase {
           breakfast, cancel_policy, nightly_price, currency, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      seedHotels.forEach(offer => hotelStatement.run(
+      if (includeDemoSupplierData) seedHotels.forEach(offer => hotelStatement.run(
         offer.id,
         offer.name,
         offer.city,
         offer.district,
-        offer.rating,
-        offer.stars,
-        offer.image,
+        offer.rating ?? 0,
+        offer.stars ?? 0,
+        offer.image ?? "",
         json(offer.tags),
         offer.roomName,
         offer.breakfast,
@@ -419,7 +449,7 @@ export class FusionDatabase {
           currency, price_key, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      seedFlights.forEach(offer => flightStatement.run(
+      if (includeDemoSupplierData) seedFlights.forEach(offer => flightStatement.run(
         offer.id,
         offer.airline,
         offer.airlineCode,
@@ -438,7 +468,7 @@ export class FusionDatabase {
         createdAt,
       ));
 
-      seedOrders.forEach((order, index) => {
+      if (includeDemoSupplierData) seedOrders.forEach((order, index) => {
         const seedTime = new Date(Date.now() - index * 25 * 60_000).toISOString();
         this.db.prepare(`
           INSERT OR IGNORE INTO orders(
@@ -564,7 +594,7 @@ export class FusionDatabase {
     const matched = offers.filter(offer =>
       offer.city.toLowerCase().includes(normalized)
       || offer.name.toLowerCase().includes(normalized));
-    return matched.length ? matched : offers;
+    return matched;
   }
 
   findHotel(id: string) {
@@ -588,14 +618,16 @@ export class FusionDatabase {
     return row ? mapFlight(row) : undefined;
   }
 
-  getAccountProfile(): AccountProfile {
+  getAccountProfile(userId = "user-demo"): AccountProfile {
     const row = this.db.prepare(`
-      SELECT id, name, language, phone, email, avatar_mime,
+      SELECT id, name, surname, given_name, language, phone, email, avatar_mime,
              avatar_updated_at, updated_at
-      FROM user_profiles WHERE id = 'user-demo'
-    `).get() as {
+      FROM user_profiles WHERE id = ?
+    `).get(userId) as {
       id: string;
       name: string;
+      surname: string | null;
+      given_name: string | null;
       language: AccountProfile["language"];
       phone: string;
       email: string;
@@ -606,6 +638,8 @@ export class FusionDatabase {
     return {
       id: row.id,
       name: row.name,
+      surname: row.surname || undefined,
+      givenName: row.given_name || undefined,
       language: row.language,
       phone: row.phone,
       email: row.email,
@@ -615,41 +649,41 @@ export class FusionDatabase {
     };
   }
 
-  updateAccountProfile(input: Pick<AccountProfile, "name" | "language" | "phone" | "email">) {
+  updateAccountProfile(input: Pick<AccountProfile, "name" | "language" | "phone" | "email"> & Pick<AccountProfile, "surname" | "givenName">, userId = "user-demo") {
     this.db.prepare(`
       UPDATE user_profiles
-      SET name = ?, language = ?, phone = ?, email = ?, updated_at = ?
-      WHERE id = 'user-demo'
-    `).run(input.name, input.language, input.phone, input.email, nowIso());
-    return this.getAccountProfile();
+      SET name = ?, surname = ?, given_name = ?, language = ?, phone = ?, email = ?, updated_at = ?
+      WHERE id = ?
+    `).run(input.name, input.surname || null, input.givenName || null, input.language, input.phone, input.email, nowIso(), userId);
+    return this.getAccountProfile(userId);
   }
 
-  saveAccountAvatar(bytes: Uint8Array, mime: AccountProfile["avatarMime"]) {
+  saveAccountAvatar(bytes: Uint8Array, mime: AccountProfile["avatarMime"], userId = "user-demo") {
     const updatedAt = nowIso();
     this.db.prepare(`
       UPDATE user_profiles
       SET avatar_blob = ?, avatar_mime = ?, avatar_updated_at = ?, updated_at = ?
-      WHERE id = 'user-demo'
-    `).run(bytes, mime || null, updatedAt, updatedAt);
-    return this.getAccountProfile();
+      WHERE id = ?
+    `).run(bytes, mime || null, updatedAt, updatedAt, userId);
+    return this.getAccountProfile(userId);
   }
 
-  getAccountAvatar() {
+  getAccountAvatar(userId = "user-demo") {
     return this.db.prepare(`
       SELECT avatar_blob, avatar_mime, avatar_updated_at
-      FROM user_profiles WHERE id = 'user-demo'
-    `).get() as {
+      FROM user_profiles WHERE id = ?
+    `).get(userId) as {
       avatar_blob: Uint8Array | null;
       avatar_mime: AccountProfile["avatarMime"] | null;
       avatar_updated_at: string | null;
     };
   }
 
-  listAccountTravelers(): AccountTraveler[] {
+  listAccountTravelers(userId = "user-demo"): AccountTraveler[] {
     const rows = this.db.prepare(`
       SELECT * FROM account_travelers
-      WHERE user_id = 'user-demo' ORDER BY created_at ASC
-    `).all() as unknown as Array<{
+      WHERE user_id = ? ORDER BY created_at ASC
+    `).all(userId) as unknown as Array<{
       id: string;
       traveler_type: AccountTraveler["type"];
       surname: string;
@@ -679,7 +713,7 @@ export class FusionDatabase {
     }));
   }
 
-  createAccountTraveler(input: Omit<AccountTraveler, "id" | "createdAt" | "updatedAt">) {
+  createAccountTraveler(input: Omit<AccountTraveler, "id" | "createdAt" | "updatedAt">, userId = "user-demo") {
     const id = `TRV-${randomUUID()}`;
     const createdAt = nowIso();
     this.db.prepare(`
@@ -687,20 +721,20 @@ export class FusionDatabase {
         id, user_id, traveler_type, surname, given_name, gender, birthday,
         nationality, document_type, document_encrypted, document_masked,
         issuing_country, expiration, created_at, updated_at
-      ) VALUES (?, 'user-demo', ?, ?, ?, ?, ?, ?, 'passport', ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'passport', ?, ?, ?, ?, ?, ?)
     `).run(
-      id, input.type, input.surname, input.givenName, input.gender, input.birthday,
+      id, userId, input.type, input.surname, input.givenName, input.gender, input.birthday,
       input.nationality, encryptPii(input.documentNo), maskDocument(input.documentNo),
       input.issuingCountry, input.expiration, createdAt, createdAt,
     );
-    return this.listAccountTravelers().find(traveler => traveler.id === id)!;
+    return this.listAccountTravelers(userId).find(traveler => traveler.id === id)!;
   }
 
-  updateAccountTraveler(id: string, input: Omit<AccountTraveler, "id" | "documentNo" | "createdAt" | "updatedAt"> & { documentNo?: string }) {
+  updateAccountTraveler(id: string, input: Omit<AccountTraveler, "id" | "documentNo" | "createdAt" | "updatedAt"> & { documentNo?: string }, userId = "user-demo") {
     const current = this.db.prepare(`
       SELECT document_encrypted, document_masked FROM account_travelers
-      WHERE id = ? AND user_id = 'user-demo'
-    `).get(id) as { document_encrypted: string; document_masked: string } | undefined;
+      WHERE id = ? AND user_id = ?
+    `).get(id, userId) as { document_encrypted: string; document_masked: string } | undefined;
     if (!current) return undefined;
     const documentEncrypted = input.documentNo ? encryptPii(input.documentNo) : current.document_encrypted;
     const documentMasked = input.documentNo ? maskDocument(input.documentNo) : current.document_masked;
@@ -709,26 +743,26 @@ export class FusionDatabase {
         traveler_type = ?, surname = ?, given_name = ?, gender = ?, birthday = ?,
         nationality = ?, document_encrypted = ?, document_masked = ?,
         issuing_country = ?, expiration = ?, updated_at = ?
-      WHERE id = ? AND user_id = 'user-demo'
+      WHERE id = ? AND user_id = ?
     `).run(
       input.type, input.surname, input.givenName, input.gender, input.birthday,
       input.nationality, documentEncrypted, documentMasked, input.issuingCountry,
-      input.expiration, nowIso(), id,
+      input.expiration, nowIso(), id, userId,
     );
-    return this.listAccountTravelers().find(traveler => traveler.id === id);
+    return this.listAccountTravelers(userId).find(traveler => traveler.id === id);
   }
 
-  deleteAccountTraveler(id: string) {
+  deleteAccountTraveler(id: string, userId = "user-demo") {
     return Number(this.db.prepare(`
-      DELETE FROM account_travelers WHERE id = ? AND user_id = 'user-demo'
-    `).run(id).changes) === 1;
+      DELETE FROM account_travelers WHERE id = ? AND user_id = ?
+    `).run(id, userId).changes) === 1;
   }
 
-  getNotificationPreferences(): NotificationPreferences {
+  getNotificationPreferences(userId = "user-demo"): NotificationPreferences {
     const row = this.db.prepare(`
       SELECT order_enabled, flight_enabled, marketing_enabled, updated_at
-      FROM notification_preferences WHERE user_id = 'user-demo'
-    `).get() as { order_enabled: number; flight_enabled: number; marketing_enabled: number; updated_at: string };
+      FROM notification_preferences WHERE user_id = ?
+    `).get(userId) as { order_enabled: number; flight_enabled: number; marketing_enabled: number; updated_at: string };
     return {
       order: Boolean(row.order_enabled),
       flight: Boolean(row.flight_enabled),
@@ -737,13 +771,103 @@ export class FusionDatabase {
     };
   }
 
-  updateNotificationPreferences(input: Omit<NotificationPreferences, "updatedAt">) {
+  updateNotificationPreferences(input: Omit<NotificationPreferences, "updatedAt">, userId = "user-demo") {
     this.db.prepare(`
       UPDATE notification_preferences
       SET order_enabled = ?, flight_enabled = ?, marketing_enabled = ?, updated_at = ?
-      WHERE user_id = 'user-demo'
-    `).run(input.order ? 1 : 0, input.flight ? 1 : 0, input.marketing ? 1 : 0, nowIso());
-    return this.getNotificationPreferences();
+      WHERE user_id = ?
+    `).run(input.order ? 1 : 0, input.flight ? 1 : 0, input.marketing ? 1 : 0, nowIso(), userId);
+    return this.getNotificationPreferences(userId);
+  }
+
+  listFavoriteHotels(userId = "user-demo"): FavoriteHotel[] {
+    const rows = this.db.prepare(`
+      SELECT hotel_snapshot_json, created_at
+      FROM account_hotel_favorites
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+    `).all(userId) as unknown as Array<{ hotel_snapshot_json: string; created_at: string }>;
+    return rows.map(row => ({
+      ...parseJson<HotelOffer>(row.hotel_snapshot_json, {} as HotelOffer),
+      favoritedAt: row.created_at,
+    }));
+  }
+
+  addFavoriteHotel(hotel: HotelOffer, userId = "user-demo"): FavoriteHotel {
+    const createdAt = nowIso();
+    this.db.prepare(`
+      INSERT INTO account_hotel_favorites(user_id, hotel_id, hotel_snapshot_json, created_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id, hotel_id) DO UPDATE SET
+        hotel_snapshot_json = excluded.hotel_snapshot_json
+    `).run(userId, hotel.id, json(hotel), createdAt);
+    return this.listFavoriteHotels(userId).find(item => item.id === hotel.id)!;
+  }
+
+  deleteFavoriteHotel(hotelId: string, userId = "user-demo") {
+    const result = this.db.prepare(`
+      DELETE FROM account_hotel_favorites
+      WHERE user_id = ? AND hotel_id = ?
+    `).run(userId, hotelId);
+    return Number(result.changes) === 1;
+  }
+
+  createLocalAccount(input: { surname: string; givenName: string; email: string; phone: string; password: string; language: AccountProfile["language"] }) {
+    const email = normalizeEmail(input.email);
+    const existing = this.db.prepare("SELECT user_id FROM local_auth_accounts WHERE email_normalized = ?").get(email);
+    if (existing) return undefined;
+    const userId = `user-${randomUUID()}`;
+    const createdAt = nowIso();
+    this.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO user_profiles(
+          id, tenant_id, name, surname, given_name, language, phone, email,
+          avatar_blob, avatar_mime, avatar_updated_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+      `).run(
+        userId, DEFAULT_TENANT_ID, `${input.surname} ${input.givenName}`.trim(), input.surname,
+        input.givenName, input.language, input.phone, input.email.trim(), createdAt, createdAt,
+      );
+      this.db.prepare(`
+        INSERT INTO local_auth_accounts(user_id, email_normalized, password_hash, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(userId, email, hashPassword(input.password), createdAt, createdAt);
+      this.db.prepare(`
+        INSERT INTO notification_preferences(user_id, order_enabled, flight_enabled, marketing_enabled, updated_at)
+        VALUES (?, 1, 1, 0, ?)
+      `).run(userId, createdAt);
+    });
+    return this.getAccountProfile(userId);
+  }
+
+  authenticateLocalAccount(email: string, password: string) {
+    const row = this.db.prepare(`
+      SELECT user_id, password_hash FROM local_auth_accounts WHERE email_normalized = ?
+    `).get(normalizeEmail(email)) as { user_id: string; password_hash: string } | undefined;
+    return row && verifyPassword(password, row.password_hash) ? row.user_id : undefined;
+  }
+
+  createLocalAuthSession(userId: string) {
+    const token = randomBytes(32).toString("base64url");
+    const createdAt = nowIso();
+    const expiresAt = new Date(Date.now() + 8 * 60 * 60_000).toISOString();
+    this.db.prepare("DELETE FROM local_auth_sessions WHERE expires_at <= ?").run(createdAt);
+    this.db.prepare(`
+      INSERT INTO local_auth_sessions(token_hash, user_id, expires_at, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run(hashSessionToken(token), userId, expiresAt, createdAt);
+    return token;
+  }
+
+  resolveLocalAuthSession(token: string) {
+    const row = this.db.prepare(`
+      SELECT user_id FROM local_auth_sessions WHERE token_hash = ? AND expires_at > ?
+    `).get(hashSessionToken(token), nowIso()) as { user_id: string } | undefined;
+    return row?.user_id;
+  }
+
+  deleteLocalAuthSession(token: string) {
+    return Number(this.db.prepare("DELETE FROM local_auth_sessions WHERE token_hash = ?").run(hashSessionToken(token)).changes) === 1;
   }
 
   saveHotelAvailability(offer: HotelOffer, amount = offer.nightlyPrice * 2) {
@@ -1183,6 +1307,8 @@ export class FusionDatabase {
       id: string;
       name: string;
       contact_name: string;
+      contact_surname: string | null;
+      contact_given_name: string | null;
       phone: string;
       email: string;
       status: Customer["status"];
@@ -1194,6 +1320,8 @@ export class FusionDatabase {
       id: row.id,
       name: row.name,
       contactName: row.contact_name,
+      contactSurname: row.contact_surname || undefined,
+      contactGivenName: row.contact_given_name || undefined,
       phone: row.phone,
       email: row.email,
       status: row.status,
@@ -1244,14 +1372,16 @@ export class FusionDatabase {
     const createdAt = nowIso();
     this.db.prepare(`
       INSERT INTO customers(
-        id, tenant_id, name, contact_name, phone, email, status,
+        id, tenant_id, name, contact_name, contact_surname, contact_given_name, phone, email, status,
         credit_limit, credit_used, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
     `).run(
       id,
       DEFAULT_TENANT_ID,
       input.name,
       input.contactName,
+      input.contactSurname || null,
+      input.contactGivenName || null,
       input.phone,
       input.email,
       input.status,
@@ -1438,18 +1568,45 @@ export class FusionDatabase {
   }
 
   dashboard() {
-    const rows = this.listOrders();
-    const active = rows.filter(order => order.status !== "CANCELLED");
-    const completed = rows.filter(order =>
-      order.status === "CONFIRMED" || order.status === "TICKETED" || order.status === "REFUNDED");
-    const alerts = rows.filter(order =>
-      ["PENDING_PAYMENT", "PROCESSING", "CHANGING", "REFUNDING"].includes(order.status)).length;
+    const rawRows = this.db.prepare("SELECT * FROM orders ORDER BY created_at DESC").all() as unknown as OrderRow[];
+    const dateKey = (value: string | Date) => {
+      const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone: process.env.APP_TIME_ZONE || "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(typeof value === "string" ? new Date(value) : value);
+      const part = (type: "year" | "month" | "day") => parts.find(item => item.type === type)?.value || "";
+      return `${part("year")}-${part("month")}-${part("day")}`;
+    };
+    const today = dateKey(new Date());
+    const todayRows = rawRows.filter(row => dateKey(row.created_at) === today);
+    const activeToday = todayRows.filter(row => row.status !== "CANCELLED" && row.status !== "FAILED");
+    const completedToday = todayRows.filter(row => row.status === "CONFIRMED" || row.status === "TICKETED");
+    const salesTodayByCurrency = activeToday.reduce<Record<string, number>>((totals, row) => ({
+      ...totals,
+      [row.currency]: Number(((totals[row.currency] || 0) + Number(row.amount)).toFixed(2)),
+    }), {});
+    const trend = Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(Date.now() - (6 - index) * 24 * 60 * 60_000);
+      const key = dateKey(date);
+      const rows = rawRows.filter(row => dateKey(row.created_at) === key && row.status !== "FAILED");
+      return {
+        date: key,
+        hotels: rows.filter(row => row.product_type === "hotel").length,
+        flights: rows.filter(row => row.product_type === "flight").length,
+      };
+    });
+    const alerts = rawRows.filter(row =>
+      ["PENDING_PAYMENT", "PROCESSING", "CHANGING", "REFUNDING"].includes(row.status)).length;
     return {
-      salesToday: active.reduce((sum, order) => sum + order.amount, 0),
-      ordersToday: rows.length,
-      successRate: rows.length ? Number((completed.length / rows.length * 100).toFixed(1)) : 0,
+      salesToday: salesTodayByCurrency.CNY || 0,
+      salesTodayByCurrency,
+      ordersToday: todayRows.length,
+      successRate: todayRows.length ? Number((completedToday.length / todayRows.length * 100).toFixed(1)) : 0,
       alerts,
-      recentOrders: rows.slice(0, 5),
+      trend,
+      recentOrders: rawRows.slice(0, 5).map(mapOrder),
     };
   }
 
@@ -1476,6 +1633,7 @@ export class FusionDatabase {
         ledgerEntries: count("ledger_entries"),
         profiles: count("user_profiles"),
         travelers: count("account_travelers"),
+        hotelFavorites: count("account_hotel_favorites"),
       },
     };
   }

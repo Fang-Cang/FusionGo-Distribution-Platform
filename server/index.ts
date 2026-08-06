@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import type { DistributionOrder, FlightAddOns, HotelOffer, OrderStatus, PaymentMethod } from "../src/types.js";
+import type { DistributionOrder, FlightAddOns, HotelOffer, NationalityCatalog, OrderStatus, PaymentMethod } from "../src/types.js";
 import {
   applyFlinkChange,
   applyFlinkRefund,
@@ -20,7 +20,8 @@ import {
   getFlinkOrderAfterSalesSource,
   getFlinkRefundDetail,
   GlinkNoProductError,
-  hydrateGlinkProduct,
+  hydrateGlinkProducts,
+  listFlinkNationalities,
   queryGlinkLowestPrices,
   payFlinkOrder,
   payFlinkChange,
@@ -28,6 +29,7 @@ import {
   searchFlinkChangeOffers,
   searchFlinkFlights,
   searchGlinkHotels,
+  synchronizeHotelQuoteFromAvailability,
   verifyFlinkFlight,
   type FlightQuoteContext,
   type HotelQuoteContext,
@@ -45,7 +47,12 @@ import {
 } from "./fcg/order-status.js";
 import { getFcgRuntime } from "./fcg/runtime.js";
 import { verifyFcgWebhook } from "./fcg/webhook.js";
+import { getDisplayFxRates } from "./fx.js";
+import { createOrderDocumentPdf } from "./order-document.js";
+import { createHotelConfirmationEmailHtml } from "./order-email.js";
+import { isSupplierCommerceRequest, simulatedSupplierDataAllowed } from "./real-data-policy.js";
 import { openFusionDatabase, type UpstreamOrderContext } from "./database.js";
+import { isoNationalityOptions, mergeSupplierNationalities } from "./reference/nationalities.js";
 
 export const app = express();
 const runtime = getFcgRuntime();
@@ -56,9 +63,12 @@ const hotelStayContexts = new Map<string, {
   checkOutDate: string;
   roomNum: number;
   numberOfAdults: number;
+  numberOfChildren?: number;
+  childrenAges?: number[];
   nights: number;
 }>();
 const flightQuotes = new Map<string, FlightQuoteContext>();
+const nationalityCatalogCache = new Map<string, { expiresAt: number; value: NationalityCatalog }>();
 const flightChangeQuotes = new Map<string, {
   orderId: string;
   passengerCode: string;
@@ -70,19 +80,37 @@ const flightChangeQuotes = new Map<string, {
 }>();
 const simulatedHotelOffers = new Map<string, HotelOffer>();
 const sandboxHotelSimulationEnabled = runtime.mode === "sandbox"
+  && simulatedSupplierDataAllowed()
   && process.env.FCG_SANDBOX_HOTEL_SIMULATION === "true";
 const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
   .split(",")
   .map(value => value.trim())
   .filter(Boolean);
+const applicationDate = () => {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: process.env.APP_TIME_ZONE || "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const part = (type: "year" | "month" | "day") => parts.find(item => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+};
 
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
-app.use((_req, res, next) => {
+app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (runtime.mode === "production") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    if (!req.secure) return res.status(426).json({
+      code: "HTTPS_REQUIRED",
+      message: "生产环境涉及个人资料的请求必须通过 HTTPS 传输",
+    });
+  }
   next();
 });
 app.use(cors({
@@ -100,6 +128,17 @@ app.use(express.json({
     (request as express.Request & { rawBody?: string }).rawBody = buffer.toString("utf8");
   },
 }));
+app.use((req, res, next) => {
+  if (runtime.mode === "mock"
+    && !simulatedSupplierDataAllowed()
+    && isSupplierCommerceRequest(req.method, req.path)) {
+    return res.status(503).json({
+      code: "REAL_SUPPLIER_DATA_REQUIRED",
+      message: "当前运行模式没有连接 G-Link/F-Link，已禁止使用模拟商品、报价和订单数据",
+    });
+  }
+  next();
+});
 
 const ok = <T>(data: T) => ({ code: "SUCCESS", message: "ok", requestId: randomUUID(), data });
 const findOrder = (id: string) => database.findOrder(id);
@@ -165,9 +204,13 @@ const productionReadiness = () => {
       && process.env.PRODUCTION_DATABASE_PERSISTENT === "true",
     piiEncryptionKey: Boolean(process.env.PII_ENCRYPTION_KEY)
       && (process.env.PII_ENCRYPTION_KEY?.length || 0) >= 32,
-    sandboxSimulationOff: process.env.FCG_SANDBOX_HOTEL_SIMULATION === "false",
+    sandboxSimulationOff: !sandboxHotelSimulationEnabled,
     paymentPolicy: process.env.PAYMENT_MODE === "enterprise_credit"
       || (process.env.PAYMENT_MODE === "card" && process.env.PAYMENT_CARD_ENABLED === "true"),
+    psd2ScaPolicy: process.env.PAYMENT_MODE !== "card"
+      || process.env.PAYMENT_PSD2_SCA_ENABLED === "true",
+    customerSupport: /^https:\/\//.test(process.env.CUSTOMER_SUPPORT_URL || "")
+      && Boolean(process.env.CUSTOMER_SUPPORT_EMAIL || process.env.CUSTOMER_SUPPORT_PHONE),
     maintenanceConfigured: process.env.ORDER_MAINTENANCE_ENABLED === "true"
       && Boolean(process.env.MAINTENANCE_API_KEY),
   };
@@ -178,11 +221,68 @@ const productionReadiness = () => {
   };
 };
 
+const AUTH_COOKIE = "fusiongo_auth";
+const readCookie = (cookieHeader: string | undefined, name: string) => {
+  if (!cookieHeader) return undefined;
+  for (const pair of cookieHeader.split(";")) {
+    const separator = pair.indexOf("=");
+    if (separator < 0) continue;
+    if (pair.slice(0, separator).trim() === name) return decodeURIComponent(pair.slice(separator + 1).trim());
+  }
+  return undefined;
+};
+const authMode = process.env.AUTH_MODE === "external" ? "external" as const : "local" as const;
+const authUserId = (req: express.Request) => {
+  if (runtime.mode === "production") return undefined;
+  const token = readCookie(req.headers.cookie, AUTH_COOKIE);
+  if (token === "local-user") return "user-demo";
+  return token && token !== "guest" ? database.resolveLocalAuthSession(token) : undefined;
+};
+const isAuthenticated = (req: express.Request) => {
+  return Boolean(authUserId(req));
+};
+const authSession = (req: express.Request) => {
+  const userId = authUserId(req);
+  const authenticated = Boolean(userId);
+  const profile = userId ? database.getAccountProfile(userId) : undefined;
+  return {
+    authenticated,
+    mode: authMode,
+    user: profile ? { id: profile.id, name: profile.name, email: profile.email, role: profile.id === "user-demo" ? "admin" as const : "member" as const } : undefined,
+  };
+};
+const authCookie = (value: string) => [
+  `${AUTH_COOKIE}=${value}`,
+  "Path=/",
+  "HttpOnly",
+  "SameSite=Lax",
+  runtime.mode === "production" ? "Secure" : "",
+  value === "guest" ? "Max-Age=31536000" : "Max-Age=28800",
+].filter(Boolean).join("; ");
+const requireAuthenticated: express.RequestHandler = (req, res, next) => {
+  if (isAuthenticated(req)) return next();
+  return res.status(401).json({
+    code: "AUTH_REQUIRED",
+    message: "请先登录后再访问账户资料或提交预订",
+  });
+};
+const requireAdmin: express.RequestHandler = (req, res, next) => {
+  if (authUserId(req) === "user-demo") return next();
+  return res.status(403).json({ code: "ADMIN_REQUIRED", message: "当前账号没有运营管理权限" });
+};
+
 app.get("/api/health", (_req, res) => res.json(ok({
   status: "up",
   mode: runtime.mode,
   database: database.status(),
 })));
+app.get("/api/fx/rates", async (_req, res) => {
+  try {
+    res.json(ok(await getDisplayFxRates()));
+  } catch (error) {
+    res.status(502).json({ code: "FX_RATE_UNAVAILABLE", message: error instanceof Error ? error.message : "汇率服务暂时不可用" });
+  }
+});
 app.get("/api/ready", (_req, res) => {
   const readiness = runtime.mode === "production"
     ? productionReadiness()
@@ -203,15 +303,145 @@ app.get("/api/integration/status", (_req, res) => res.json(ok({
   },
 })));
 
+app.get("/api/auth/session", (req, res) => res.json(ok(authSession(req))));
+app.post("/api/auth/login", (req, res) => {
+  if (runtime.mode === "production" || authMode === "external") {
+    return res.status(501).json({
+      code: "EXTERNAL_LOGIN_REQUIRED",
+      message: "生产环境必须接入企业统一身份认证后才能登录",
+    });
+  }
+  const parsed = z.object({ email: z.string().email(), password: z.string().min(8).max(72) }).safeParse(req.body || {});
+  const userId = parsed.success
+    ? database.authenticateLocalAccount(parsed.data.email, parsed.data.password)
+    : "user-demo";
+  if (!userId) return res.status(401).json({ code: "INVALID_CREDENTIALS", message: "邮箱或密码不正确" });
+  const profile = database.getAccountProfile(userId);
+  res.setHeader("Set-Cookie", authCookie(database.createLocalAuthSession(userId)));
+  return res.json(ok({ authenticated: true, mode: authMode, user: { id: profile.id, name: profile.name, email: profile.email, role: userId === "user-demo" ? "admin" as const : "member" as const } }));
+});
+const internationalPhoneSchema = z.string().trim().min(1).max(30).refine(value => {
+  if (!/^\+?[0-9 ()-]+$/.test(value)) return false;
+  const digitCount = value.replace(/\D/g, "").length;
+  return digitCount >= 7 && digitCount <= 15;
+}, "电话号码必须包含 7–15 位数字，可选使用国家码、空格、短横线或括号");
+
+app.post("/api/auth/register", (req, res) => {
+  if (runtime.mode === "production" || authMode === "external") {
+    return res.status(501).json({
+      code: "EXTERNAL_REGISTRATION_REQUIRED",
+      message: "生产环境必须通过企业统一身份系统创建账号",
+    });
+  }
+  const parsed = z.object({
+    surname: z.string().trim().min(1).max(50),
+    givenName: z.string().trim().min(1).max(50),
+    email: z.string().trim().email().max(120),
+    phone: internationalPhoneSchema,
+    password: z.string().min(8).max(72)
+      .regex(/[A-Za-z]/, "密码必须包含字母")
+      .regex(/[0-9]/, "密码必须包含数字"),
+    language: z.enum(["zh-CN", "zh-TW", "en"]).default("en"),
+    acceptedTerms: z.literal(true),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({
+    code: "INVALID_REGISTRATION",
+    message: parsed.error.issues[0]?.message || "注册资料格式不正确",
+  });
+  const profile = database.createLocalAccount(parsed.data);
+  if (!profile) return res.status(409).json({ code: "EMAIL_ALREADY_REGISTERED", message: "该邮箱已经注册，请直接登录" });
+  res.setHeader("Set-Cookie", authCookie(database.createLocalAuthSession(profile.id)));
+  return res.status(201).json(ok({ authenticated: true, mode: authMode, user: { id: profile.id, name: profile.name, email: profile.email, role: "member" as const } }));
+});
+app.post("/api/auth/logout", (req, res) => {
+  const token = readCookie(req.headers.cookie, AUTH_COOKIE);
+  if (token && token !== "guest" && token !== "local-user") database.deleteLocalAuthSession(token);
+  res.setHeader("Set-Cookie", authCookie("guest"));
+  return res.json(ok({ authenticated: false, mode: authMode }));
+});
+
+app.use("/api/dashboard", requireAuthenticated);
+app.use("/api/account", requireAuthenticated);
+app.use("/api/customers", requireAuthenticated);
+app.use("/api/pricing-rules", requireAuthenticated);
+app.use("/api/finance", requireAuthenticated);
+app.use("/api/orders", requireAuthenticated);
+app.use("/api/hotels/availability", requireAuthenticated);
+app.use("/api/flights/verify", requireAuthenticated);
+app.use("/api/dashboard", requireAdmin);
+app.use("/api/customers", requireAdmin);
+app.use("/api/pricing-rules", requireAdmin);
+app.use("/api/finance", requireAdmin);
+
+app.get("/api/reference/nationalities", async (req, res) => {
+  const parsed = z.enum(["zh-CN", "zh-TW", "en"]).safeParse(req.query.locale || "zh-CN");
+  if (!parsed.success) return res.status(400).json({
+    code: "INVALID_LOCALE",
+    message: "国籍列表语言仅支持 zh-CN、zh-TW 或 en",
+  });
+  const locale = parsed.data;
+  const cached = nationalityCatalogCache.get(locale);
+  if (cached && cached.expiresAt > Date.now()) return res.json(ok(cached.value));
+
+  let value: NationalityCatalog;
+  if (runtime.mode !== "mock" && runtime.flinkConfigured) {
+    try {
+      const supplierLang: "zh_CN" | "zh_TW" | "en" = {
+        "zh-CN": "zh_CN",
+        "zh-TW": "zh_TW",
+        en: "en",
+      }[locale] as "zh_CN" | "zh_TW" | "en";
+      const supplierItems = await listFlinkNationalities(runtime.flink, supplierLang);
+      if (!supplierItems.length) throw new Error("F-Link 返回空国籍列表");
+      const items = mergeSupplierNationalities(supplierItems);
+      value = {
+        items,
+        source: "flink",
+        count: items.length,
+        fetchedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      const items = isoNationalityOptions();
+      value = {
+        items,
+        source: "iso-3166",
+        count: items.length,
+        fetchedAt: new Date().toISOString(),
+        warning: error instanceof Error
+          ? `F-Link 国籍基础数据暂不可用，当前展示完整 ISO 3166 枚举：${error.message}`
+          : "F-Link 国籍基础数据暂不可用，当前展示完整 ISO 3166 枚举",
+      };
+    }
+  } else {
+    const items = isoNationalityOptions();
+    value = {
+      items,
+      source: "iso-3166",
+      count: items.length,
+      fetchedAt: new Date().toISOString(),
+      warning: runtime.mode === "mock"
+        ? "本地 mock 模式未调用 F-Link，当前展示完整 ISO 3166 枚举"
+        : "F-Link 凭证未配置，当前展示完整 ISO 3166 枚举",
+    };
+  }
+  nationalityCatalogCache.set(locale, {
+    value,
+    expiresAt: Date.now() + (value.source === "flink" ? 24 * 60 * 60_000 : 60 * 60_000),
+  });
+  return res.json(ok(value));
+});
+
 app.get("/api/dashboard", (_req, res) => {
   res.json(ok(database.dashboard()));
 });
 
-const accountProfileResponse = () => {
-  const profile = database.getAccountProfile();
+const accountProfileResponse = (req: express.Request) => {
+  const profile = database.getAccountProfile(authUserId(req)!);
   return {
     id: profile.id,
     name: profile.name,
+    surname: profile.surname,
+    givenName: profile.givenName,
     language: profile.language,
     phone: profile.phone,
     email: profile.email,
@@ -223,17 +453,19 @@ const accountProfileResponse = () => {
   };
 };
 
-app.get("/api/account/profile", (_req, res) => res.json(ok(accountProfileResponse())));
+app.get("/api/account/profile", (req, res) => res.json(ok(accountProfileResponse(req))));
 app.patch("/api/account/profile", (req, res) => {
   const parsed = z.object({
     name: z.string().trim().min(1).max(50),
+    surname: z.string().trim().min(1).max(50).optional(),
+    givenName: z.string().trim().min(1).max(50).optional(),
     language: z.enum(["zh-CN", "zh-TW", "en"]),
-    phone: z.string().regex(/^1\d{10}$/),
+    phone: internationalPhoneSchema,
     email: z.string().email().max(120),
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_PROFILE", message: "个人资料格式不正确" });
-  database.updateAccountProfile(parsed.data);
-  return res.json(ok(accountProfileResponse()));
+  database.updateAccountProfile(parsed.data, authUserId(req)!);
+  return res.json(ok(accountProfileResponse(req)));
 });
 app.put(
   "/api/account/profile/avatar",
@@ -252,12 +484,12 @@ app.put(
       code: "AVATAR_TYPE_INVALID",
       message: "头像内容不是有效的 PNG 或 JPG 图片",
     });
-    database.saveAccountAvatar(bytes, mime);
-    return res.json(ok(accountProfileResponse()));
+    database.saveAccountAvatar(bytes, mime, authUserId(req)!);
+    return res.json(ok(accountProfileResponse(req)));
   },
 );
-app.get("/api/account/profile/avatar", (_req, res) => {
-  const avatar = database.getAccountAvatar();
+app.get("/api/account/profile/avatar", (req, res) => {
+  const avatar = database.getAccountAvatar(authUserId(req)!);
   if (!avatar?.avatar_blob || !avatar.avatar_mime) return res.status(404).json({
     code: "AVATAR_NOT_FOUND",
     message: "尚未保存个人头像",
@@ -280,14 +512,14 @@ const travelerFields = {
 };
 const passportNumber = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{5,20}$/);
 
-app.get("/api/account/travelers", (_req, res) => res.json(ok(database.listAccountTravelers())));
+app.get("/api/account/travelers", (req, res) => res.json(ok(database.listAccountTravelers(authUserId(req)!))));
 app.post("/api/account/travelers", (req, res) => {
   const parsed = z.object({ ...travelerFields, documentNo: passportNumber }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({
     code: "INVALID_TRAVELER",
     message: "常用旅客或护照信息格式不正确",
   });
-  return res.status(201).json(ok(database.createAccountTraveler(parsed.data)));
+  return res.status(201).json(ok(database.createAccountTraveler(parsed.data, authUserId(req)!)));
 });
 app.patch("/api/account/travelers/:travelerId", (req, res) => {
   const parsed = z.object({ ...travelerFields, documentNo: passportNumber.optional() }).safeParse(req.body);
@@ -295,25 +527,69 @@ app.patch("/api/account/travelers/:travelerId", (req, res) => {
     code: "INVALID_TRAVELER",
     message: "常用旅客或护照信息格式不正确",
   });
-  const traveler = database.updateAccountTraveler(req.params.travelerId, parsed.data);
+  const traveler = database.updateAccountTraveler(req.params.travelerId, parsed.data, authUserId(req)!);
   if (!traveler) return res.status(404).json({ code: "TRAVELER_NOT_FOUND", message: "常用旅客不存在" });
   return res.json(ok(traveler));
 });
 app.delete("/api/account/travelers/:travelerId", (req, res) => {
-  if (!database.deleteAccountTraveler(req.params.travelerId)) {
+  if (!database.deleteAccountTraveler(req.params.travelerId, authUserId(req)!)) {
     return res.status(404).json({ code: "TRAVELER_NOT_FOUND", message: "常用旅客不存在" });
   }
   return res.json(ok({ deleted: true as const }));
 });
 
-app.get("/api/account/notifications", (_req, res) => res.json(ok(database.getNotificationPreferences())));
+app.get("/api/account/notifications", (req, res) => res.json(ok(database.getNotificationPreferences(authUserId(req)!))));
 app.patch("/api/account/notifications", (req, res) => {
   const parsed = z.object({ order: z.boolean(), flight: z.boolean(), marketing: z.boolean() }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({
     code: "INVALID_NOTIFICATION_PREFERENCES",
     message: "通知偏好格式不正确",
   });
-  return res.json(ok(database.updateNotificationPreferences(parsed.data)));
+  return res.json(ok(database.updateNotificationPreferences(parsed.data, authUserId(req)!)));
+});
+
+const favoriteHotelSchema = z.object({
+  id: z.string().min(1).max(160),
+  inventorySource: z.enum(["glink", "simulation"]).optional(),
+  name: z.string().min(1).max(200),
+  city: z.string().max(100).default(""),
+  cityCode: z.string().max(20).optional(),
+  district: z.string().max(160).default(""),
+  rating: z.number().min(0).max(10).optional(),
+  ratingSource: z.string().max(100).optional(),
+  stars: z.number().int().min(0).max(5).optional(),
+  image: z.string().max(2_000).optional(),
+  tags: z.array(z.string().max(80)).max(20).default([]),
+  roomName: z.string().max(200).default(""),
+  breakfast: z.string().max(300).default(""),
+  cancelPolicy: z.string().max(2_000).default(""),
+  nightlyPrice: z.number().min(0).default(0),
+  currency: z.string().length(3).default("CNY"),
+});
+
+app.get("/api/account/hotel-favorites", (req, res) => {
+  res.json(ok(database.listFavoriteHotels(authUserId(req)!)));
+});
+app.post("/api/account/hotel-favorites", (req, res) => {
+  const parsed = z.object({ hotel: favoriteHotelSchema }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({
+    code: "INVALID_HOTEL_FAVORITE",
+    message: "收藏酒店资料不完整",
+  });
+  if (parsed.data.hotel.inventorySource === "simulation"
+    || (process.env.NODE_ENV !== "test" && parsed.data.hotel.inventorySource !== "glink")) {
+    return res.status(422).json({
+      code: "REAL_HOTEL_REQUIRED",
+      message: "只能收藏 G-Link 真实接口返回的酒店",
+    });
+  }
+  return res.status(201).json(ok(database.addFavoriteHotel(parsed.data.hotel, authUserId(req)!)));
+});
+app.delete("/api/account/hotel-favorites/:hotelId", (req, res) => {
+  if (!database.deleteFavoriteHotel(req.params.hotelId, authUserId(req)!)) {
+    return res.status(404).json({ code: "HOTEL_FAVORITE_NOT_FOUND", message: "该酒店尚未收藏" });
+  }
+  return res.json(ok({ deleted: true as const }));
 });
 
 app.get("/api/customers", (_req, res) => res.json(ok(database.listCustomers())));
@@ -321,6 +597,8 @@ app.post("/api/customers", (req, res) => {
   const parsed = z.object({
     name: z.string().min(2).max(100),
     contactName: z.string().min(1).max(50),
+    contactSurname: z.string().min(1).max(50).optional(),
+    contactGivenName: z.string().min(1).max(50).optional(),
     phone: z.string().min(8).max(30),
     email: z.string().email(),
     creditLimit: z.number().min(0).max(100_000_000),
@@ -369,13 +647,22 @@ app.get("/api/finance/summary", (_req, res) => res.json(ok(database.financeSumma
 app.post("/api/hotels/search", async (req, res) => {
   const parsed = z.object({
     destination: z.string().min(1),
-    checkIn: z.string(),
-    checkOut: z.string(),
+    checkIn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    checkOut: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     rooms: z.number().int().min(1).max(8).default(1),
     adults: z.number().int().min(1).max(16).default(2),
     children: z.number().int().min(0).max(8).default(0),
     childAges: z.array(z.number().int().min(0).max(17)).max(8).default([]),
   }).superRefine((value, context) => {
+    if (value.checkIn < applicationDate()) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "入住日期不能早于今天" });
+    }
+    if (value.checkOut <= value.checkIn) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "退房日期必须晚于入住日期" });
+    }
+    if (value.adults < value.rooms) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "每间房至少需要一位成人" });
+    }
     if (value.children !== value.childAges.length) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: "儿童年龄数量必须与儿童人数一致" });
     }
@@ -465,7 +752,7 @@ app.post("/api/hotels/product-details", async (req, res) => {
   if (runtime.mode === "mock") {
     const offer = database.findHotel(parsed.data.offerId);
     if (!offer) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "酒店报价已失效" });
-    return res.json(ok({
+    return res.json(ok([{
       ...offer,
       ...hotelStayContexts.get(offer.id),
       nightlyPrice: database.calculateSaleAmount("hotel", offer.nightlyPrice),
@@ -475,21 +762,21 @@ app.post("/api/hotels/product-details", async (req, res) => {
           * (hotelStayContexts.get(offer.id)?.nights || 2)
           * (hotelStayContexts.get(offer.id)?.roomNum || 1),
       ),
-    }));
+    }]));
   }
   const quote = hotelQuotes.get(parsed.data.offerId);
   if (!quote) return res.status(410).json({ code: "QUOTE_EXPIRED", message: "酒店搜索会话已失效，请重新搜索" });
   try {
-    const hydrated = await hydrateGlinkProduct(runtime.glink, quote);
-    hotelQuotes.set(hydrated.quote.id, hydrated.quote);
-    return res.json(ok({
-      ...hydrated.offer,
-      nightlyPrice: database.calculateSaleAmount("hotel", hydrated.offer.nightlyPrice),
-      totalPrice: database.calculateSaleAmount("hotel", hydrated.offer.totalPrice || hydrated.offer.nightlyPrice),
-    }));
+    const hydratedProducts = await hydrateGlinkProducts(runtime.glink, quote);
+    hydratedProducts.forEach(product => hotelQuotes.set(product.quote.id, product.quote));
+    return res.json(ok(hydratedProducts.map(({ offer }) => ({
+      ...offer,
+      nightlyPrice: database.calculateSaleAmount("hotel", offer.nightlyPrice),
+      totalPrice: database.calculateSaleAmount("hotel", offer.totalPrice || offer.nightlyPrice),
+    }))));
   } catch (error) {
     if (sandboxHotelSimulationEnabled && error instanceof GlinkNoProductError) {
-      return res.json(ok(simulatedHotelOffer(quote)));
+      return res.json(ok([simulatedHotelOffer(quote)]));
     }
     throw error;
   }
@@ -540,6 +827,8 @@ app.post("/api/hotels/availability", async (req, res) => {
   const quote = hotelQuotes.get(parsed.data.offerId);
   if (!quote) return res.status(410).json({ code: "QUOTE_EXPIRED", message: "房型报价已过期，请重新进入酒店详情" });
   const availability = await checkGlinkAvailability(runtime.glink, quote);
+  const synchronizedQuote = synchronizeHotelQuoteFromAvailability(quote, availability);
+  hotelQuotes.set(parsed.data.offerId, synchronizedQuote);
   const supplierAmount = fcgValue.number(availability.totalSalePrice);
   if (supplierAmount <= 0) throw new FcgError("G-Link 验房未返回有效总价", "GLINK_INVALID_AVAILABILITY_PRICE", 422);
   const amount = database.calculateSaleAmount("hotel", supplierAmount);
@@ -560,15 +849,36 @@ app.post("/api/hotels/availability", async (req, res) => {
     checkOutDate: quote.checkOutDate,
     roomNum: quote.roomNum,
     numberOfAdults: quote.numberOfAdults,
+    numberOfChildren: quote.numberOfChildren || 0,
+    childrenAges: quote.childrenAges || [],
     nights: hotelNightCount(quote.checkInDate, quote.checkOutDate),
+    ...(synchronizedQuote.bedTypeDescription ? { bedTypeDescription: synchronizedQuote.bedTypeDescription } : {}),
+    ...(synchronizedQuote.nonRefundable !== undefined ? { nonRefundable: synchronizedQuote.nonRefundable } : {}),
+    ...(synchronizedQuote.cancelRestrictionType !== undefined ? { cancelRestrictionType: synchronizedQuote.cancelRestrictionType } : {}),
+    ...(synchronizedQuote.cancelPolicy ? { cancelPolicy: synchronizedQuote.cancelPolicy } : {}),
+    ...(synchronizedQuote.checkInInstructions ? { checkInInstructions: synchronizedQuote.checkInInstructions } : {}),
+    ...(synchronizedQuote.specialCheckInInstructions?.length ? { specialCheckInInstructions: synchronizedQuote.specialCheckInInstructions } : {}),
+    payAtHotel: synchronizedQuote.payAtHotelFlag === 1,
+    paymentTiming: synchronizedQuote.payAtHotelFlag === 1
+      ? "由酒店在到店或退房时向旅客收取"
+      : "提交订单后由 FusionGo 企业授信账户支付",
+    paymentProcessor: synchronizedQuote.payAtHotelFlag === 1 ? "预订酒店" : "FusionGo 企业授信",
+    paymentProcessingLocation: synchronizedQuote.payAtHotelFlag === 1
+      ? "酒店所在地"
+      : "不适用：本订单非 Expedia Group MoR",
+    ...(synchronizedQuote.priceBreakdown ? { priceBreakdown: {
+      ...synchronizedQuote.priceBreakdown,
+      total: amount,
+      serviceFee: Math.max(0, amount - supplierAmount),
+    } } : {}),
   }));
 });
 
 app.post("/api/flights/search", async (req, res) => {
   const parsed = z.object({
-    from: z.string().min(3),
-    to: z.string().min(3),
-    departureDate: z.string(),
+    from: z.string().trim().min(3),
+    to: z.string().trim().min(3),
+    departureDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     adults: z.number().int().min(1).max(9).default(1),
     children: z.number().int().min(0).max(8).default(0),
     infants: z.number().int().min(0).max(8).default(0),
@@ -576,27 +886,46 @@ app.post("/api/flights/search", async (req, res) => {
     journeys: z.array(z.object({
       origin: z.string().min(3),
       destination: z.string().min(3),
-      date: z.string().min(10),
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     })).min(1).max(4).optional(),
   }).superRefine((value, context) => {
-    const count = value.journeys?.length || 1;
+    const journeys = value.journeys || [{ origin: value.from, destination: value.to, date: value.departureDate }];
+    const count = journeys.length;
+    if (value.from.trim().toUpperCase() === value.to.trim().toUpperCase()
+      || journeys.some(journey => journey.origin.trim().toUpperCase() === journey.destination.trim().toUpperCase())) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "出发地和目的地不能相同" });
+    }
+    if (journeys.some(journey => journey.date < applicationDate())) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "航班日期不能早于今天" });
+    }
     if (value.tripType === 2 && count !== 2) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: "往返行程必须包含去程和返程" });
     }
     if (value.tripType === 3 && count < 2) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: "多程行程至少包含两段" });
     }
+    if (journeys.some((journey, index) => index > 0 && journey.date < journeys[index - 1].date)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "后续航段日期不能早于前一航段" });
+    }
+    if (value.adults + value.children + value.infants > 9) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "单次预订旅客总数不能超过9人" });
+    }
+    if (value.infants > value.adults) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "每位成人最多携带一名婴儿" });
+    }
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "请填写完整航班条件" });
   if (runtime.mode === "mock") return res.json(ok(database.listFlights().map(offer => ({
     ...offer,
     price: database.calculateSaleAmount("flight", offer.price),
+    totalPrice: database.calculateSaleAmount("flight", offer.totalPrice || offer.price * parsed.data.adults),
   }))));
   const result = await searchFlinkFlights(runtime.flink, parsed.data);
   result.quotes.forEach(quote => flightQuotes.set(quote.id, quote));
   return res.json(ok(result.offers.map(offer => ({
     ...offer,
     price: database.calculateSaleAmount("flight", offer.price),
+    totalPrice: database.calculateSaleAmount("flight", offer.totalPrice || offer.price * parsed.data.adults),
   }))));
 });
 
@@ -665,7 +994,7 @@ const hotelOrderSchema = z.object({
     firstName: glinkEnglishName,
     lastName: glinkEnglishName,
   })).min(1).max(8).optional(),
-  contact: z.object({ name: z.string().min(1), phone: z.string().min(8), email: z.string().email() }),
+  contact: z.object({ name: z.string().min(1), surname: z.string().min(1).optional(), givenName: z.string().min(1).optional(), phone: z.string().min(8), email: z.string().email() }),
   arriveTime: z.string().regex(/^\d{2}:\d{2}$/),
   latestArriveTime: z.string().regex(/^\d{2}:\d{2}$/),
 });
@@ -674,7 +1003,7 @@ const flightOrderSchema = z.object({
   offerId: z.string(),
   customerId: z.string().default("CUS-001"),
   quantity: z.number().int().min(1).max(9).optional(),
-  contact: z.object({ name: z.string().min(1), phone: z.string().min(8), email: z.string().email() }),
+  contact: z.object({ name: z.string().min(1), surname: z.string().min(1).optional(), givenName: z.string().min(1).optional(), phone: z.string().min(8), email: z.string().email() }),
   passengers: z.array(z.object({
     surname: z.string().min(1),
     name: z.string().min(1),
@@ -713,6 +1042,19 @@ app.get("/api/orders/:orderId/details", (req, res) => {
   const guest = fcgValue.record(contactSnapshot.guest);
   const guests = fcgValue.array(contactSnapshot.guests).map(fcgValue.record);
   const productSnapshot = fcgValue.record(snapshots?.product);
+  const snapshotPositiveNumber = (value: unknown) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  };
+  const checkInDate = fcgValue.string(productSnapshot.checkInDate);
+  const checkOutDate = fcgValue.string(productSnapshot.checkOutDate);
+  const derivedNights = checkInDate && checkOutDate
+    ? Math.round((Date.parse(`${checkOutDate}T00:00:00Z`) - Date.parse(`${checkInDate}T00:00:00Z`)) / 86_400_000)
+    : undefined;
+  const nights = snapshotPositiveNumber(productSnapshot.nights)
+    || (derivedNights && derivedNights > 0 ? derivedNights : undefined);
+  const roomNum = snapshotPositiveNumber(productSnapshot.roomNum);
+  const numberOfAdults = snapshotPositiveNumber(productSnapshot.numberOfAdults);
   const passenger = passengers[0] || {};
   const rawDocument = fcgValue.string(passenger.idNumber);
   const documentMasked = rawDocument
@@ -723,23 +1065,43 @@ app.get("/api/orders/:orderId/details", (req, res) => {
       ? [fcgValue.string(passenger.surname), fcgValue.string(passenger.name)].filter(Boolean).join("/")
       : [fcgValue.string(guest.lastName), fcgValue.string(guest.firstName)].filter(Boolean).join(" "),
     contactName: fcgValue.string(contact.name),
+    contactSurname: fcgValue.string(contact.surname) || undefined,
+    contactGivenName: fcgValue.string(contact.givenName) || undefined,
     email: fcgValue.string(contact.email),
     phone: fcgValue.string(contact.phone),
     documentMasked,
     serviceSummary: order.productType === "flight"
-      ? `${passengers.length || 1} 位乘机人 · 退改以航司核算为准`
-      : `${guests.length || 1} 间房主要入住人 · 取消以酒店政策为准`,
+      ? (passengers.length ? `${passengers.length} 位乘机人` : "上游未返回乘机人数")
+      : [roomNum ? `${roomNum}间` : "", nights ? `${nights}晚` : "", numberOfAdults ? `${numberOfAdults}位成人` : ""]
+        .filter(Boolean).join(" · ") || "上游未返回完整住宿信息",
+    roomName: fcgValue.string(productSnapshot.roomName) || undefined,
+    breakfast: fcgValue.string(productSnapshot.breakfast) || undefined,
+    cancelPolicy: fcgValue.string(productSnapshot.cancelPolicy) || undefined,
+    bedTypeDescription: fcgValue.string(productSnapshot.bedTypeDescription) || undefined,
+    ...(productSnapshot.nonRefundable !== undefined ? { nonRefundable: Boolean(productSnapshot.nonRefundable) } : {}),
+    checkInInstructions: fcgValue.string(productSnapshot.checkInInstructions) || undefined,
+    specialCheckInInstructions: fcgValue.array(productSnapshot.specialCheckInInstructions)
+      .map(value => fcgValue.string(value)).filter(Boolean),
+    payAtHotel: fcgValue.number(productSnapshot.payAtHotelFlag) === 1,
+    paymentTiming: fcgValue.number(productSnapshot.payAtHotelFlag) === 1
+      ? "由酒店在到店或退房时向旅客收取"
+      : "提交订单后由 FusionGo 企业授信账户支付",
+    paymentProcessor: fcgValue.number(productSnapshot.payAtHotelFlag) === 1 ? "预订酒店" : "FusionGo 企业授信",
+    paymentProcessingLocation: fcgValue.number(productSnapshot.payAtHotelFlag) === 1
+      ? "酒店所在地"
+      : "不适用：本订单非 Expedia Group MoR",
+    priceBreakdown: Object.keys(fcgValue.record(productSnapshot.priceBreakdown)).length
+      ? fcgValue.record(productSnapshot.priceBreakdown)
+      : undefined,
+    cabin: fcgValue.string(productSnapshot.cabin) || undefined,
+    baggage: fcgValue.string(productSnapshot.baggage) || undefined,
     ...(order.productType === "hotel" ? {
       hotelStay: {
-        checkInDate: fcgValue.string(productSnapshot.checkInDate),
-        checkOutDate: fcgValue.string(productSnapshot.checkOutDate),
-        nights: fcgValue.number(productSnapshot.nights,
-          hotelNightCount(
-            fcgValue.string(productSnapshot.checkInDate, "2026-08-12"),
-            fcgValue.string(productSnapshot.checkOutDate, "2026-08-14"),
-          )),
-        roomNum: fcgValue.number(productSnapshot.roomNum, guests.length || 1),
-        numberOfAdults: fcgValue.number(productSnapshot.numberOfAdults, guests.length || 1),
+        checkInDate,
+        checkOutDate,
+        nights,
+        roomNum,
+        numberOfAdults,
         numberOfChildren: fcgValue.number(productSnapshot.numberOfChildren),
         childrenAges: fcgValue.array(productSnapshot.childrenAges).map(value => fcgValue.number(value)),
         guests: (guests.length ? guests : [guest]).map(item => ({
@@ -750,7 +1112,8 @@ app.get("/api/orders/:orderId/details", (req, res) => {
     } : {}),
   }));
 });
-app.get("/api/orders/:orderId/documents/:type", (req, res) => {
+app.get("/api/orders/:orderId/documents/:type", async (req, res, next) => {
+  if (req.params.type === "email-preview") return next();
   const order = findOrder(req.params.orderId);
   if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "订单不存在" });
   const type = z.enum(["confirmation", "receipt", "ticket"]).safeParse(req.params.type);
@@ -758,23 +1121,47 @@ app.get("/api/orders/:orderId/documents/:type", (req, res) => {
   if (type.data === "ticket" && (order.productType !== "flight" || order.status !== "TICKETED")) {
     return res.status(409).json({ code: "TICKET_NOT_READY", message: "航司尚未出票，电子客票暂不可下载" });
   }
-  const labels = {
-    confirmation: "预订确认单",
-    receipt: "电子收据",
-    ticket: "电子客票",
-  } as const;
-  const document = [
-    `FusionGo ${labels[type.data]}`,
-    `订单号：${order.id}`,
-    `产品：${order.title}`,
-    `行程：${order.subtitle}`,
-    `金额：${order.currency} ${order.amount.toFixed(2)}`,
-    `状态：${order.status}`,
-    `生成时间：${new Date().toISOString()}`,
-  ].join("\n");
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.setHeader("Content-Disposition", `attachment; filename="${order.id}-${type.data}.txt"`);
-  return res.send(document);
+  if (type.data === "confirmation" && !["CONFIRMED", "TICKETED"].includes(order.status)) {
+    return res.status(409).json({ code: "CONFIRMATION_NOT_READY", message: "订单尚未确认，电子凭证暂不可下载" });
+  }
+  try {
+    const pdf = await createOrderDocumentPdf({
+      order,
+      type: type.data,
+      snapshots: database.getOrderSnapshots(order.id),
+    });
+    const documentName = type.data === "ticket" ? "ticket" : type.data === "receipt" ? "receipt" : "confirmation";
+    const asciiFilename = `${order.id}-${documentName}.pdf`;
+    const localizedFilename = `${order.id}-${type.data === "ticket" ? "电子客票" : type.data === "receipt" ? "电子付款凭证" : "预订确认凭证"}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Length", String(pdf.length));
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Content-Disposition", `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(localizedFilename)}`);
+    return res.send(pdf);
+  } catch (error) {
+    return res.status(503).json({
+      code: "DOCUMENT_RENDER_FAILED",
+      message: error instanceof Error ? error.message : "电子凭证生成失败",
+    });
+  }
+});
+app.get("/api/orders/:orderId/documents/email-preview", (req, res) => {
+  const order = findOrder(req.params.orderId);
+  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "订单不存在" });
+  if (order.productType !== "hotel") return res.status(409).json({ code: "HOTEL_EMAIL_ONLY", message: "当前模板仅用于酒店确认邮件" });
+  if (order.status !== "CONFIRMED") return res.status(409).json({ code: "CONFIRMATION_NOT_READY", message: "订单尚未确认，确认邮件暂不可生成" });
+  const html = createHotelConfirmationEmailHtml({
+    order,
+    snapshots: database.getOrderSnapshots(order.id),
+    publicAppUrl: process.env.PUBLIC_APP_URL,
+    supportEmail: process.env.CUSTOMER_SUPPORT_EMAIL,
+    supportPhone: process.env.CUSTOMER_SUPPORT_PHONE,
+    supportUrl: process.env.CUSTOMER_SUPPORT_URL,
+  });
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; base-uri 'none'; frame-ancestors 'none'");
+  return res.send(html);
 });
 app.get("/api/orders/:orderId/history", (req, res) => {
   const order = findOrder(req.params.orderId);
@@ -975,7 +1362,7 @@ app.post("/api/orders", async (req, res) => {
   }
 
   if (parsed.data.productType === "hotel") {
-    const quote = hotelQuotes.get(parsed.data.offerId);
+    let quote = hotelQuotes.get(parsed.data.offerId);
     if (!quote) return res.status(410).json({ code: "QUOTE_EXPIRED", message: "酒店报价已过期，请重新验房" });
     if (!validateHotelGuests(quote.roomNum)) return res.status(400).json({
       code: "HOTEL_GUEST_ROOM_MISMATCH",
@@ -990,6 +1377,8 @@ app.post("/api/orders", async (req, res) => {
     }
     // Mandatory second availability check immediately before creating the supplier order.
     const availability = await checkGlinkAvailability(runtime.glink, quote);
+    quote = synchronizeHotelQuoteFromAvailability(quote, availability);
+    hotelQuotes.set(parsed.data.offerId, quote);
     const currentSupplierAmount = fcgValue.number(availability.totalSalePrice);
     if (currentSupplierAmount <= 0) throw new FcgError(
       "G-Link 二次验房未返回有效总价",
@@ -1015,6 +1404,17 @@ app.post("/api/orders", async (req, res) => {
       });
     }
     const currentAmount = database.calculateSaleAmount("hotel", currentSupplierAmount);
+    if (quote.priceBreakdown) {
+      quote = {
+        ...quote,
+        priceBreakdown: {
+          ...quote.priceBreakdown,
+          total: currentAmount,
+          serviceFee: Math.max(0, currentAmount - currentSupplierAmount),
+        },
+      };
+      hotelQuotes.set(parsed.data.offerId, quote);
+    }
     const partnerOrderCode = coOrderCode();
     const order: DistributionOrder = {
       id: localOrderId(),
@@ -1204,10 +1604,10 @@ app.post("/api/orders/:orderId/pay", async (req, res) => {
   const upstream = database.getUpstreamContext(order.id);
   const payment = z.object({ paymentMethod: z.enum(["credit", "card"]).default("credit") }).safeParse(req.body || {});
   if (!payment.success) return res.status(400).json({ code: "INVALID_PAYMENT_METHOD", message: "不支持的支付方式" });
-  if (runtime.mode === "production" && payment.data.paymentMethod === "card" && process.env.PAYMENT_CARD_ENABLED !== "true") {
+  if (payment.data.paymentMethod === "card") {
     return res.status(409).json({
       code: "PAYMENT_CHANNEL_UNAVAILABLE",
-      message: "生产环境尚未启用银行卡收单，请改用企业授信账户",
+      message: "银行卡与数字钱包尚未接入真实收单渠道，请改用企业授信账户",
     });
   }
   if (payment.data.paymentMethod === "credit") {
@@ -1304,6 +1704,8 @@ const changeStatusLabels = ["待审核", "待支付", "审核拒绝", "改签出
 const refundStatusLabels = ["待审核", "待确认", "审核拒绝", "退款中", "退款完成", "已撤销"];
 const contactSchema = z.object({
   name: z.string().min(1).max(50),
+  surname: z.string().min(1).max(50).optional(),
+  givenName: z.string().min(1).max(50).optional(),
   phone: z.string().min(6).max(30),
   email: z.string().email(),
 });
@@ -1970,6 +2372,8 @@ app.post("/api/admin/maintenance/orders/run", async (req, res) => {
     if (!expected || provided !== expected) {
       return res.status(401).json({ code: "UNAUTHORIZED", message: "维护任务密钥不正确" });
     }
+  } else if (!isAuthenticated(req)) {
+    return res.status(401).json({ code: "AUTH_REQUIRED", message: "请先登录后再运行维护任务" });
   }
   return res.json(ok(await runOrderMaintenance()));
 });

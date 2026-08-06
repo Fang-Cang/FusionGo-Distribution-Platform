@@ -1,4 +1,13 @@
 export type ProductType = "hotel" | "flight";
+export type DisplayCurrency = "CNY" | "USD" | "HKD" | "SGD";
+
+export interface DisplayFxRates {
+  base: "CNY";
+  date: string;
+  source: "Frankfurter";
+  fetchedAt: string;
+  rates: Record<DisplayCurrency, number>;
+}
 export type OrderStatus =
   | "PENDING_PAYMENT"
   | "PROCESSING"
@@ -12,9 +21,32 @@ export type OrderStatus =
 
 export type PaymentMethod = "credit" | "card";
 
+export interface AuthSession {
+  authenticated: boolean;
+  mode: "local" | "external";
+  user?: {
+    id: string;
+    name: string;
+    email: string;
+    role: "admin" | "member";
+  };
+}
+
+export interface RegistrationInput {
+  surname: string;
+  givenName: string;
+  email: string;
+  phone: string;
+  password: string;
+  language: "zh-CN" | "zh-TW" | "en";
+  acceptedTerms: true;
+}
+
 export interface AccountProfile {
   id: string;
   name: string;
+  surname?: string;
+  givenName?: string;
   language: "zh-CN" | "zh-TW" | "en";
   phone: string;
   email: string;
@@ -38,6 +70,23 @@ export interface AccountTraveler {
   updatedAt: string;
 }
 
+export interface NationalityOption {
+  code: string;
+  nameZh: string;
+  nameZhTw: string;
+  nameEn: string;
+  dialingCode: string;
+  source: "flink" | "iso-3166";
+}
+
+export interface NationalityCatalog {
+  items: NationalityOption[];
+  source: "flink" | "iso-3166";
+  count: number;
+  fetchedAt: string;
+  warning?: string;
+}
+
 export interface NotificationPreferences {
   order: boolean;
   flight: boolean;
@@ -56,14 +105,27 @@ export interface HotelOffer {
   inventorySource?: "glink" | "simulation";
   name: string;
   city: string;
+  cityCode?: string;
   district: string;
-  rating: number;
-  stars: number;
-  image: string;
+  rating?: number;
+  ratingSource?: string;
+  stars?: number;
+  image?: string;
   tags: string[];
   roomName: string;
+  ratePlanName?: string;
   breakfast: string;
   cancelPolicy: string;
+  bedTypeDescription?: string;
+  nonRefundable?: boolean;
+  cancelRestrictionType?: number;
+  checkInInstructions?: string;
+  specialCheckInInstructions?: string[];
+  payAtHotel?: boolean;
+  paymentTiming?: string;
+  paymentProcessor?: string;
+  paymentProcessingLocation?: string;
+  priceBreakdown?: HotelPriceBreakdown;
   nightlyPrice: number;
   currency: string;
   checkInDate?: string;
@@ -74,6 +136,31 @@ export interface HotelOffer {
   childrenAges?: number[];
   nights?: number;
   totalPrice?: number;
+  maxRoomCount?: number;
+}
+
+export interface FavoriteHotel extends HotelOffer {
+  favoritedAt: string;
+}
+
+export interface HotelPriceBreakdown {
+  roomSubtotal?: number;
+  taxFee?: number;
+  salesTax?: number;
+  otherTax?: number;
+  serviceFee?: number;
+  chargesDueAtProperty?: number;
+  chargesDueAtPropertyCurrency?: string;
+  chargesDueAtPropertyNotice?: string;
+  total: number;
+  currency: string;
+  feeItems?: Array<{
+    type: string;
+    value: number;
+    currency: string;
+    date?: string;
+    chargeFrequency?: string;
+  }>;
 }
 
 export interface FlightOffer {
@@ -90,6 +177,7 @@ export interface FlightOffer {
   cabin: string;
   baggage: string;
   price: number;
+  totalPrice?: number;
   currency: string;
   priceKey: string;
   tripType?: 1 | 2 | 3;
@@ -121,21 +209,38 @@ export interface DistributionOrder {
   currency: string;
   status: OrderStatus;
   createdAt: string;
+  createdAtIso?: string;
 }
 
 export interface OrderBookingDetails {
   travelerName: string;
   contactName: string;
+  contactSurname?: string;
+  contactGivenName?: string;
   email: string;
   phone: string;
   documentMasked?: string;
   serviceSummary: string;
+  roomName?: string;
+  breakfast?: string;
+  cancelPolicy?: string;
+  bedTypeDescription?: string;
+  nonRefundable?: boolean;
+  checkInInstructions?: string;
+  specialCheckInInstructions?: string[];
+  payAtHotel?: boolean;
+  paymentTiming?: string;
+  paymentProcessor?: string;
+  paymentProcessingLocation?: string;
+  priceBreakdown?: HotelPriceBreakdown;
+  cabin?: string;
+  baggage?: string;
   hotelStay?: {
     checkInDate: string;
     checkOutDate: string;
-    nights: number;
-    roomNum: number;
-    numberOfAdults: number;
+    nights?: number;
+    roomNum?: number;
+    numberOfAdults?: number;
     numberOfChildren?: number;
     childrenAges?: number[];
     guests: Array<{ roomIndex: number; name: string }>;
@@ -192,6 +297,8 @@ export interface Customer {
   id: string;
   name: string;
   contactName: string;
+  contactSurname?: string;
+  contactGivenName?: string;
   phone: string;
   email: string;
   status: "ACTIVE" | "SUSPENDED";

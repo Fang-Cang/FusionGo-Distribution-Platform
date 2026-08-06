@@ -89,7 +89,15 @@ describe("FusionDatabase persistence", () => {
       givenName: "MINGYU",
       documentNo: "P9•••••66",
     });
-    expect(reopened.status().migrationVersion).toBe(6);
+    expect(reopened.status().migrationVersion).toBe(11);
     reopened.close();
+  });
+
+  it("returns no hotels when a destination has no matching local test data", () => {
+    const database = new FusionDatabase(":memory:");
+    database.seed(true);
+    expect(database.listHotels("上海")).toHaveLength(3);
+    expect(database.listHotels("深圳")).toEqual([]);
+    database.close();
   });
 });

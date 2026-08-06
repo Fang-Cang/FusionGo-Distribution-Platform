@@ -1,18 +1,24 @@
 import type {
   AccountProfile,
   AccountTraveler,
+  AuthSession,
   Customer,
   DistributionOrder,
+  DisplayFxRates,
   FinanceSummary,
   FlightAddOns,
   FlightAfterSalesContext,
   FlightChangeOffer,
   FlightOffer,
+  FavoriteHotel,
   HotelOffer,
+  HotelPriceBreakdown,
   OrderBookingDetails,
   PaymentMethod,
   PricingRule,
+  RegistrationInput,
   NotificationPreferences,
+  NationalityCatalog,
 } from "./types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -20,6 +26,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(path, {
       ...init,
+      credentials: "same-origin",
       headers: { "Content-Type": "application/json", ...init?.headers },
     });
   } catch {
@@ -36,8 +43,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getAuthSession: () => request<AuthSession>("/api/auth/session"),
+  login: (credentials?: { email: string; password: string }) => request<AuthSession>("/api/auth/login", {
+    method: "POST",
+    body: credentials ? JSON.stringify(credentials) : undefined,
+  }),
+  register: (body: RegistrationInput) => request<AuthSession>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
+  logout: () => request<AuthSession>("/api/auth/logout", { method: "POST" }),
+  listNationalities: (locale: "zh-CN" | "zh-TW" | "en") =>
+    request<NationalityCatalog>(`/api/reference/nationalities?locale=${encodeURIComponent(locale)}`),
+  getDisplayFxRates: () => request<DisplayFxRates>("/api/fx/rates"),
   getAccountProfile: () => request<AccountProfile>("/api/account/profile"),
-  updateAccountProfile: (body: Pick<AccountProfile, "name" | "language" | "phone" | "email">) =>
+  updateAccountProfile: (body: Pick<AccountProfile, "name" | "language" | "phone" | "email"> & Pick<AccountProfile, "surname" | "givenName">) =>
     request<AccountProfile>("/api/account/profile", {
       method: "PATCH",
       body: JSON.stringify(body),
@@ -47,6 +67,7 @@ export const api = {
     try {
       response = await fetch("/api/account/profile/avatar", {
         method: "PUT",
+        credentials: "same-origin",
         headers: { "Content-Type": file.type },
         body: file,
       });
@@ -72,19 +93,31 @@ export const api = {
   }),
   deleteAccountTraveler: (id: string) =>
     request<{ deleted: true }>(`/api/account/travelers/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  listFavoriteHotels: () => request<FavoriteHotel[]>("/api/account/hotel-favorites"),
+  addFavoriteHotel: (hotel: HotelOffer) =>
+    request<FavoriteHotel>("/api/account/hotel-favorites", {
+      method: "POST",
+      body: JSON.stringify({ hotel }),
+    }),
+  deleteFavoriteHotel: (hotelId: string) =>
+    request<{ deleted: true }>(`/api/account/hotel-favorites/${encodeURIComponent(hotelId)}`, { method: "DELETE" }),
   getNotificationPreferences: () => request<NotificationPreferences>("/api/account/notifications"),
   updateNotificationPreferences: (body: Omit<NotificationPreferences, "updatedAt">) =>
     request<NotificationPreferences>("/api/account/notifications", {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
-  searchHotels: (params: { destination: string; checkIn: string; checkOut: string; rooms?: number; adults?: number; children?: number; childAges?: number[] }) =>
+  searchHotels: (
+    params: { destination: string; checkIn: string; checkOut: string; rooms?: number; adults?: number; children?: number; childAges?: number[] },
+    signal?: AbortSignal,
+  ) =>
     request<HotelOffer[]>("/api/hotels/search", {
       method: "POST",
       body: JSON.stringify(params),
+      signal,
     }),
-  getHotelProduct: (offerId: string) =>
-    request<HotelOffer>("/api/hotels/product-details", {
+  getHotelProducts: (offerId: string) =>
+    request<HotelOffer[]>("/api/hotels/product-details", {
       method: "POST",
       body: JSON.stringify({ offerId }),
     }),
@@ -101,6 +134,17 @@ export const api = {
       numberOfChildren?: number;
       childrenAges?: number[];
       nights?: number;
+      bedTypeDescription?: string;
+      nonRefundable?: boolean;
+      cancelRestrictionType?: number;
+      cancelPolicy?: string;
+      checkInInstructions?: string;
+      specialCheckInInstructions?: string[];
+      payAtHotel?: boolean;
+      paymentTiming?: string;
+      paymentProcessor?: string;
+      paymentProcessingLocation?: string;
+      priceBreakdown?: HotelPriceBreakdown;
     }>("/api/hotels/availability", {
       method: "POST",
       body: JSON.stringify({ offerId }),
@@ -136,7 +180,7 @@ export const api = {
       quantity?: number;
       guest?: { firstName: string; lastName: string };
       guests?: Array<{ roomIndex: number; firstName: string; lastName: string }>;
-      contact?: { name: string; phone: string; email: string };
+      contact?: { name: string; surname?: string; givenName?: string; phone: string; email: string };
       arriveTime?: string;
       latestArriveTime?: string;
     }
@@ -145,7 +189,7 @@ export const api = {
       offerId: string;
       customerId?: string;
       quantity?: number;
-      contact?: { name: string; phone: string; email: string };
+      contact?: { name: string; surname?: string; givenName?: string; phone: string; email: string };
       passengers?: Array<{
         surname: string;
         name: string;
@@ -188,7 +232,7 @@ export const api = {
     reasonType: 1 | 2;
     reason: string;
     evidenceFiles: string[];
-    contact: { name: string; phone: string; email: string };
+    contact: { name: string; surname?: string; givenName?: string; phone: string; email: string };
   }) => request<FlightAfterSalesContext>(`/api/orders/${orderId}/flight-aftersales/change/apply`, {
     method: "POST",
     headers: { "Idempotency-Key": crypto.randomUUID() },
@@ -206,7 +250,7 @@ export const api = {
     refundType: 1 | 2;
     reason: string;
     evidenceFiles: string[];
-    contact: { name: string; phone: string; email: string };
+    contact: { name: string; surname?: string; givenName?: string; phone: string; email: string };
   }) => request<FlightAfterSalesContext>(`/api/orders/${orderId}/flight-aftersales/refund/apply`, {
     method: "POST",
     headers: { "Idempotency-Key": crypto.randomUUID() },
@@ -227,15 +271,19 @@ export const api = {
   dashboard: () =>
     request<{
       salesToday: number;
+      salesTodayByCurrency: Record<string, number>;
       ordersToday: number;
       successRate: number;
       alerts: number;
+      trend: Array<{ date: string; hotels: number; flights: number }>;
       recentOrders: DistributionOrder[];
     }>("/api/dashboard"),
   listCustomers: () => request<Customer[]>("/api/customers"),
   createCustomer: (body: {
     name: string;
     contactName: string;
+    contactSurname?: string;
+    contactGivenName?: string;
     phone: string;
     email: string;
     creditLimit: number;

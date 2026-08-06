@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
   name TEXT NOT NULL,
-  language TEXT NOT NULL DEFAULT 'zh-CN',
+  language TEXT NOT NULL DEFAULT 'en',
   phone TEXT NOT NULL,
   email TEXT NOT NULL,
   avatar_blob BLOB,

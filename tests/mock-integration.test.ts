@@ -19,7 +19,7 @@ type ApiResponse<T> = {
 async function request<T>(path: string, init?: RequestInit): Promise<ApiResponse<T>> {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: { "Content-Type": "application/json", Cookie: "fusiongo_auth=local-user", ...init?.headers },
   });
   const body = await response.json() as ApiResponse<T>["body"];
   return { response, body };
@@ -51,6 +51,16 @@ afterAll(async () => {
 });
 
 describe("mock hotel integration", () => {
+  it("returns no hotels instead of falling back to another city", async () => {
+    const search = await post<HotelOffer[]>("/api/hotels/search", {
+      destination: "深圳",
+      checkIn: "2026-08-12",
+      checkOut: "2026-08-14",
+    });
+    expect(search.response.status).toBe(200);
+    expect(search.body.data).toEqual([]);
+  });
+
   it("enforces availability check and persists the complete payment flow", async () => {
     const search = await post<HotelOffer[]>("/api/hotels/search", {
       destination: "上海",
@@ -107,6 +117,25 @@ describe("mock hotel integration", () => {
     ]);
   });
 
+  it("rejects card payment until a real acquiring channel is integrated", async () => {
+    const hotel = database.findHotel("HTL-SHA-001")!;
+    database.saveHotelAvailability(hotel);
+    const created = await post<DistributionOrder>("/api/orders", {
+      productType: "hotel",
+      offerId: hotel.id,
+      guest: { firstName: "CARD", lastName: "BLOCK" },
+      contact: { name: "收单门禁", phone: "13800138000", email: "card-gate@example.com" },
+      arriveTime: "18:00",
+      latestArriveTime: "22:00",
+    });
+    expect(created.response.status).toBe(201);
+    const blocked = await post(`/api/orders/${created.body.data.id}/pay`, { paymentMethod: "card" });
+    expect(blocked.response.status).toBe(409);
+    expect(blocked.body.code).toBe("PAYMENT_CHANNEL_UNAVAILABLE");
+    const order = await request<DistributionOrder>(`/api/orders/${created.body.data.id}`);
+    expect(order.body.data.status).toBe("PENDING_PAYMENT");
+  });
+
   it("books multiple rooms across multiple nights with one primary guest per room", async () => {
     const search = await post<HotelOffer[]>("/api/hotels/search", {
       destination: "上海",
@@ -118,15 +147,16 @@ describe("mock hotel integration", () => {
     const listed = search.body.data[0];
     expect(listed).toMatchObject({ roomNum: 2, numberOfAdults: 4, nights: 3 });
 
-    const product = await post<HotelOffer>("/api/hotels/product-details", { offerId: listed.id });
-    expect(product.body.data).toMatchObject({
+    const product = await post<HotelOffer[]>("/api/hotels/product-details", { offerId: listed.id });
+    expect(product.body.data).toHaveLength(1);
+    expect(product.body.data[0]).toMatchObject({
       checkInDate: "2026-09-10",
       checkOutDate: "2026-09-13",
       roomNum: 2,
       nights: 3,
     });
     const availability = await post<{ price: number }>("/api/hotels/availability", { offerId: listed.id });
-    expect(availability.body.data.price).toBe(product.body.data.totalPrice);
+    expect(availability.body.data.price).toBe(product.body.data[0].totalPrice);
 
     const created = await post<DistributionOrder>("/api/orders", {
       productType: "hotel",
@@ -351,7 +381,7 @@ describe("database and webhook observability", () => {
       counts: { orders: number; payments: number };
     }>("/api/database/status");
     expect(status.body.data.driver).toBe("sqlite");
-    expect(status.body.data.migrationVersion).toBe(6);
+    expect(status.body.data.migrationVersion).toBe(11);
     expect(status.body.data.counts.orders).toBeGreaterThan(5);
     expect(status.body.data.counts.payments).toBeGreaterThanOrEqual(2);
 
@@ -391,7 +421,7 @@ describe("business operations", () => {
     expect(uploaded.response.status).toBe(200);
     expect(uploaded.body.data.avatarUrl).toContain("/api/account/profile/avatar?v=");
 
-    const avatarResponse = await fetch(`${baseUrl}/api/account/profile/avatar`);
+    const avatarResponse = await fetch(`${baseUrl}/api/account/profile/avatar`, { headers: { Cookie: "fusiongo_auth=local-user" } });
     expect(avatarResponse.status).toBe(200);
     expect(avatarResponse.headers.get("content-type")).toBe("image/png");
     expect(new Uint8Array(await avatarResponse.arrayBuffer())).toEqual(new Uint8Array(png));
