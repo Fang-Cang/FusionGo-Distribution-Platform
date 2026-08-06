@@ -14,6 +14,8 @@ import {
   CircleHelp,
   Clock3,
   CreditCard,
+  Eye,
+  EyeOff,
   FileText,
   Globe2,
   Heart,
@@ -370,6 +372,8 @@ function Shell({
   const [notificationOrders, setNotificationOrders] = useState<DistributionOrder[]>([]);
   const [authView, setAuthView] = useState<"signin" | "register">("signin");
   const [authFormError, setAuthFormError] = useState("");
+  const [showSignInPassword, setShowSignInPassword] = useState(false);
+  const [showRegPassword, setShowRegPassword] = useState(false);
   const [signInForm, setSignInForm] = useState({ email: "", password: "" });
   const [registrationForm, setRegistrationForm] = useState({ surname: "", givenName: "", email: "", phone: "", password: "", confirmPassword: "", acceptedTerms: false });
   const copy = shellCopy[locale];
@@ -390,6 +394,8 @@ function Shell({
     if (authPromptOpen) return;
     setAuthView("signin");
     setAuthFormError("");
+    setShowSignInPassword(false);
+    setShowRegPassword(false);
     setSignInForm({ email: "", password: "" });
     setRegistrationForm({ surname: "", givenName: "", email: "", phone: "", password: "", confirmPassword: "", acceptedTerms: false });
   }, [authPromptOpen]);
@@ -540,22 +546,22 @@ function Shell({
             <p className="modal-subtitle">{authView === "signin"
               ? english ? "Use your email and password to access bookings and traveler profiles." : "使用邮箱和密码访问订单、常用旅客与账户资料。"
               : english ? "Names are stored separately to match passports and supplier booking requirements." : "姓与名将分别保存，以符合护照和供应商预订要求。"}</p>
-            <div className="auth-segmented" role="tablist" aria-label={english ? "Authentication mode" : "账号入口"}><button type="button" role="tab" aria-selected={authView === "signin"} className={authView === "signin" ? "active" : ""} onClick={() => switchAuthView("signin")}>{english ? "Sign in" : "登录"}</button><button type="button" role="tab" aria-selected={authView === "register"} className={authView === "register" ? "active" : ""} onClick={() => switchAuthView("register")}>{english ? "Create account" : "注册新账号"}</button></div>
+            <div className="auth-segmented" role="tablist" aria-label={english ? "Authentication mode" : "账号入口"} onKeyDown={event => { if (event.key === "ArrowRight" || event.key === "ArrowLeft") { event.preventDefault(); switchAuthView(authView === "signin" ? "register" : "signin"); } }}><button type="button" role="tab" aria-selected={authView === "signin"} className={authView === "signin" ? "active" : ""} onClick={() => switchAuthView("signin")}>{english ? "Sign in" : "登录"}</button><button type="button" role="tab" aria-selected={authView === "register"} className={authView === "register" ? "active" : ""} onClick={() => switchAuthView("register")}>{english ? "Create account" : "注册新账号"}</button></div>
             {authView === "signin" ? <div className="auth-form-grid">
               <label><span>{english ? "Email address" : "电子邮箱"}</span><input type="email" autoComplete="email" required value={signInForm.email} onChange={event => setSignInForm(current => ({ ...current, email: event.target.value }))} /></label>
-              <label><span>{english ? "Password" : "密码"}</span><input type="password" autoComplete="current-password" required minLength={8} maxLength={72} value={signInForm.password} onChange={event => setSignInForm(current => ({ ...current, password: event.target.value }))} /></label>
+              <label className="password-field"><span>{english ? "Password" : "密码"}</span><div className="password-input-wrap"><input type={showSignInPassword ? "text" : "password"} autoComplete="current-password" required minLength={8} maxLength={72} value={signInForm.password} onChange={event => setSignInForm(current => ({ ...current, password: event.target.value }))} /><button type="button" className="password-toggle" onClick={() => setShowSignInPassword(v => !v)} tabIndex={-1} aria-label={showSignInPassword ? (english ? "Hide password" : "隐藏密码") : (english ? "Show password" : "显示密码")}>{showSignInPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div><button type="button" className="forgot-password" onClick={() => setAuthFormError(english ? "Contact your administrator to reset your password." : "请联系管理员重置密码。")}>{english ? "Forgot password?" : "忘记密码？"}</button></label>
             </div> : <div className="auth-form-grid two-columns">
               <label><span>{english ? "Surname" : "姓"}</span><input autoComplete="family-name" required maxLength={50} value={registrationForm.surname} onChange={event => setRegistrationForm(current => ({ ...current, surname: event.target.value }))} /></label>
               <label><span>{english ? "Given name" : "名"}</span><input autoComplete="given-name" required maxLength={50} value={registrationForm.givenName} onChange={event => setRegistrationForm(current => ({ ...current, givenName: event.target.value }))} /></label>
               <label className="wide"><span>{english ? "Email address" : "电子邮箱"}</span><input type="email" autoComplete="email" required maxLength={120} value={registrationForm.email} onChange={event => setRegistrationForm(current => ({ ...current, email: event.target.value }))} /></label>
               <label className="wide"><span>{english ? "Mobile number" : "手机号码"}</span><input type="tel" autoComplete="tel" required pattern="[+]?[0-9][0-9 -]{6,19}" value={registrationForm.phone} onChange={event => setRegistrationForm(current => ({ ...current, phone: event.target.value }))} /></label>
-              <label><span>{english ? "Password" : "密码"}</span><input type="password" autoComplete="new-password" required minLength={8} maxLength={72} pattern="(?=.*[A-Za-z])(?=.*[0-9]).{8,72}" value={registrationForm.password} onChange={event => setRegistrationForm(current => ({ ...current, password: event.target.value }))} /><small>{english ? "8–72 characters with letters and numbers" : "8–72 位，必须同时包含字母和数字"}</small></label>
-              <label><span>{english ? "Confirm password" : "确认密码"}</span><input type="password" autoComplete="new-password" required minLength={8} maxLength={72} value={registrationForm.confirmPassword} onChange={event => setRegistrationForm(current => ({ ...current, confirmPassword: event.target.value }))} /></label>
+              <label className="password-field"><span>{english ? "Password" : "密码"}</span><div className="password-input-wrap"><input type={showRegPassword ? "text" : "password"} autoComplete="new-password" required minLength={8} maxLength={72} pattern="(?=.*[A-Za-z])(?=.*[0-9]).{8,72}" value={registrationForm.password} onChange={event => setRegistrationForm(current => ({ ...current, password: event.target.value }))} /><button type="button" className="password-toggle" onClick={() => setShowRegPassword(v => !v)} tabIndex={-1} aria-label={showRegPassword ? (english ? "Hide password" : "隐藏密码") : (english ? "Show password" : "显示密码")}>{showRegPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div><small>{english ? "8–72 characters with letters and numbers" : "8–72 位，必须同时包含字母和数字"}</small></label>
+              <label className="password-field"><span>{english ? "Confirm password" : "确认密码"}</span><div className="password-input-wrap"><input type={showRegPassword ? "text" : "password"} autoComplete="new-password" required minLength={8} maxLength={72} value={registrationForm.confirmPassword} onChange={event => setRegistrationForm(current => ({ ...current, confirmPassword: event.target.value }))} /><button type="button" className="password-toggle" onClick={() => setShowRegPassword(v => !v)} tabIndex={-1} aria-label={showRegPassword ? (english ? "Hide password" : "隐藏密码") : (english ? "Show password" : "显示密码")}>{showRegPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
               <label className="auth-terms wide"><input type="checkbox" checked={registrationForm.acceptedTerms} onChange={event => setRegistrationForm(current => ({ ...current, acceptedTerms: event.target.checked }))} /><span>{english ? "I agree to the booking terms and privacy notice." : "我已阅读并同意预订条款与隐私说明。"}</span></label>
             </div>}
             {(authFormError || authError) && <p className="error-copy" role="alert">{authFormError || authError}</p>}
-            <div className="modal-actions auth-actions"><button type="button" className="secondary" onClick={() => onAuthPromptChange(false)} disabled={authBusy}>{english ? "Continue searching" : "继续查询"}</button><button className="primary" disabled={authBusy}>{authBusy ? <><LoaderCircle className="spinner" size={17} />{authView === "signin" ? english ? "Signing in…" : "登录中…" : english ? "Creating account…" : "正在创建账号…"}</> : authView === "signin" ? <><LogIn size={17} />{english ? "Sign in" : "登录"}</> : <><UserRound size={17} />{english ? "Create account" : "注册并登录"}</>}</button></div>
-            {authView === "signin" && <button type="button" className="acceptance-login" onClick={() => onLogin()} disabled={authBusy}>{english ? "Use the local acceptance account" : "使用本地验收账号"}</button>}
+            <div className="modal-actions auth-actions"><button type="button" className="secondary" onClick={() => onAuthPromptChange(false)} disabled={authBusy}>{english ? "Continue searching" : "继续查询"}</button><button className="primary" disabled={authBusy}>{authBusy ? <><LoaderCircle className="spinner" size={17} />{authView === "signin" ? english ? "Signing in…" : "登录中…" : english ? "Creating account…" : "正在创建账号…"}</> : authView === "signin" ? <><LogIn size={17} />{english ? "Log in" : "登录"}</> : <><UserRound size={17} />{english ? "Create account" : "注册并登录"}</>}</button></div>
+            {authView === "signin" && <button type="button" className="acceptance-login" onClick={() => onLogin()} disabled={authBusy}><UserRound size={14} />{english ? "Use the local acceptance account" : "使用本地验收账号"}</button>}
             <small className="auth-environment-note">{english ? "Self-registration is available only in local and sandbox environments. Production uses corporate SSO." : "自助注册仅用于本地与沙箱环境；生产环境必须使用企业统一身份认证。"}</small>
           </form>
         </div>}

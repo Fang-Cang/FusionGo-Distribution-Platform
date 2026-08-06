@@ -494,7 +494,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .auth-benefits { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0; }
 .auth-benefits span { min-height: 58px; padding: 12px; border: 1px solid rgba(58,70,96,.1); border-radius: 14px; display: flex; align-items: center; gap: 9px; color: var(--accent); background: rgba(255,255,255,.48); }
 .auth-benefits b { color: #465268; font-size: 11px; line-height: 1.4; }
-.auth-segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin: 0 0 20px; border: 1px solid rgba(58,70,96,.1); border-radius: 14px; background: rgba(224,229,240,.58); box-shadow: inset 0 1px 2px rgba(24,35,58,.05); }
+.auth-segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin: 0 0 24px; border: 1px solid rgba(58,70,96,.1); border-radius: 14px; background: rgba(224,229,240,.58); box-shadow: inset 0 1px 2px rgba(24,35,58,.05); }
 .auth-segmented button { min-height: 40px; border-radius: 10px; color: #69758a; font-size: 11px; font-weight: 750; }
 .auth-segmented button:hover { color: var(--accent); background: rgba(255,255,255,.52); }
 .auth-segmented button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -512,10 +512,18 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .auth-terms input { flex: 0 0 auto; margin-top: 2px; accent-color: var(--accent); }
 .auth-terms span { margin: 0 !important; line-height: 1.5; }
 .auth-actions { align-items: center; }
-.acceptance-login { width: 100%; margin-top: 12px; color: var(--accent); font-size: 10px; font-weight: 700; text-align: center; }
-.acceptance-login:hover { text-decoration: underline; }
-.acceptance-login:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 5px; }
-.auth-environment-note { display: block; margin-top: 15px; color: #7c8799; font-size: 9px; line-height: 1.55; text-align: right; }
+.acceptance-login { display: inline-flex; align-items: center; gap: 6px; margin: 14px auto 0; padding: 8px 18px; border: 1px solid rgba(91,85,246,.18); border-radius: 20px; color: var(--accent); font-size: 10px; font-weight: 700; background: rgba(91,85,246,.05); cursor: pointer; transition: all .2s; }
+.acceptance-login:hover { background: rgba(91,85,246,.1); border-color: rgba(91,85,246,.3); }
+.acceptance-login:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.acceptance-login:disabled { opacity: .5; cursor: not-allowed; }
+.auth-environment-note { display: block; margin-top: 15px; color: #7c8799; font-size: 9px; line-height: 1.55; text-align: center; }
+.password-input-wrap { position: relative; }
+.auth-form-grid .password-input-wrap input { padding-right: 42px; }
+.password-toggle { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 30px; height: 30px; border: none; background: transparent; color: #8792a3; display: grid; place-items: center; cursor: pointer; border-radius: 8px; transition: all .15s; }
+.password-toggle:hover { color: var(--accent); background: rgba(91,85,246,.08); }
+.password-toggle:active { transform: translateY(-50%) scale(.92); }
+.forgot-password { display: inline-block; margin: 6px 0 0 2px; padding: 0; border: none; background: transparent; color: var(--accent); font-size: 10px; font-weight: 600; cursor: pointer; }
+.forgot-password:hover { text-decoration: underline; }
 .passport-privacy-note { margin: 18px 0 0; padding: 11px 13px; border: 1px solid rgba(91,85,246,.14); border-radius: 12px; display: flex; align-items: flex-start; gap: 8px; color: #59657a; background: rgba(91,85,246,.06); font-size: 10px; line-height: 1.55; }
 .passport-privacy-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--accent); }
 .summary-row { padding: 16px 0; border-top: 1px solid rgba(35,47,70,.1); border-bottom: 1px solid rgba(35,47,70,.1); display: flex; align-items: center; gap: 12px; }
