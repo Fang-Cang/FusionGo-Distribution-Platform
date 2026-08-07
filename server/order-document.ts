@@ -15,24 +15,24 @@ const positiveNumber = (value: unknown) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 };
-const shown = (value: unknown) => text(value) || "上游未提供";
+const shown = (value: unknown) => text(value) || "Not provided by supplier";
 const maskDocument = (value: unknown) => {
   const raw = text(value);
-  if (!raw) return "上游未提供";
+  if (!raw) return "Not provided by supplier";
   if (raw.length <= 4) return "*".repeat(raw.length);
   return `${raw.slice(0, 2)}${"*".repeat(Math.max(3, raw.length - 4))}${raw.slice(-2)}`;
 };
 
 const statusLabels: Record<OrderStatus, string> = {
-  PENDING_PAYMENT: "待支付",
-  PROCESSING: "处理中",
-  CONFIRMED: "已确认",
-  TICKETED: "已出票",
-  CHANGING: "改签中",
-  CANCELLED: "已取消",
-  REFUNDING: "退款中",
-  REFUNDED: "已退款",
-  FAILED: "处理失败",
+  PENDING_PAYMENT: "Pending Payment",
+  PROCESSING: "Processing",
+  CONFIRMED: "Confirmed",
+  TICKETED: "Ticketed",
+  CHANGING: "Changing",
+  CANCELLED: "Cancelled",
+  REFUNDING: "Refunding",
+  REFUNDED: "Refunded",
+  FAILED: "Failed",
 };
 
 const fontCandidates = [
@@ -47,7 +47,7 @@ const fontCandidates = [
 
 const resolveFont = () => {
   const path = fontCandidates.find(existsSync);
-  if (!path) throw new Error("未找到中文 PDF 字体，请通过 PDF_CJK_FONT_PATH 配置 Noto Sans CJK 或等价字体");
+  if (!path) throw new Error("CJK PDF font not found. Configure Noto Sans CJK or equivalent via PDF_CJK_FONT_PATH.");
   const regularFamily = process.env.PDF_CJK_FONT_FAMILY
     || (path.includes("PingFang.ttc") ? "PingFangSC-Regular" : undefined);
   const mediumFamily = process.env.PDF_CJK_FONT_MEDIUM_FAMILY
@@ -89,15 +89,15 @@ export async function createOrderDocumentPdf(input: {
   }).format(new Date());
 
   const title = type === "ticket"
-    ? "航班电子客票与行程凭证"
+    ? "Flight E-Ticket & Itinerary Voucher"
     : type === "receipt"
-      ? "电子付款凭证"
-      : order.productType === "hotel" ? "酒店预订确认凭证" : "航班预订确认凭证";
+      ? "Electronic Payment Voucher"
+      : order.productType === "hotel" ? "Hotel Booking Confirmation Voucher" : "Flight Booking Confirmation Voucher";
   const font = resolveFont();
   const doc = new PDFDocument({ size: "A4", margin: 42, info: {
     Title: `${title} - ${order.id}`,
     Author: "FusionGo",
-    Subject: "真实供应商订单电子凭证",
+    Subject: "Supplier Order E-Voucher",
   } });
   doc.registerFont("FG-Regular", font.path, font.regularFamily);
   doc.registerFont("FG-Medium", font.mediumPath, font.mediumFamily);
@@ -122,7 +122,7 @@ export async function createOrderDocumentPdf(input: {
   doc.roundedRect(42, 34, 46, 46, 12).fill(indigo);
   doc.fillColor("#FFFFFF").font("FG-Medium").fontSize(24).text("F", 42, 43, { width: 46, align: "center" });
   doc.font("FG-Medium").fontSize(19).text("FusionGo", 102, 37);
-  doc.font("FG-Regular").fontSize(8.5).fillColor("#DCE8FF").text("全球商旅分销平台", 102, 63);
+  doc.font("FG-Regular").fontSize(8.5).fillColor("#DCE8FF").text("Global Travel Distribution Platform", 102, 63);
   doc.font("FG-Regular").fontSize(8).fillColor("#BED0F2").text("ELECTRONIC TRAVEL DOCUMENT", 42, 99);
 
   const status = statusLabels[order.status];
@@ -134,15 +134,15 @@ export async function createOrderDocumentPdf(input: {
   doc.fillColor(ink).font("FG-Medium").fontSize(22).text(title, 42, y);
   y += 34;
   doc.fillColor(muted).font("FG-Regular").fontSize(9)
-    .text("请核对以下订单信息；最终履约、退改及服务规则以供应商实时确认为准。", 42, y);
+    .text("Please verify the order information below. Final fulfillment, refund/exchange, and service rules are subject to real-time supplier confirmation.", 42, y);
   y += 25;
 
   const metaY = y;
   doc.roundedRect(42, metaY, contentWidth, 66, 12).fill(pale);
   const meta = [
-    ["本地订单号", order.id],
-    ["上游订单号", order.supplierOrderNo || "上游未返回"],
-    ["凭证生成时间", generatedAt],
+    ["Local Order ID", order.id],
+    ["Supplier Order ID", order.supplierOrderNo || "Not returned by supplier"],
+    ["Voucher Generated At", generatedAt],
   ];
   meta.forEach(([label, value], index) => {
     const x = 58 + index * (contentWidth / 3);
@@ -167,28 +167,28 @@ export async function createOrderDocumentPdf(input: {
     y += 15;
   };
 
-  sectionTitle(order.productType === "hotel" ? "住宿信息" : "航程信息");
+  sectionTitle(order.productType === "hotel" ? "Accommodation" : "Itinerary");
   cardStart(order.productType === "hotel" ? 152 : 140);
-  row(order.productType === "hotel" ? "酒店名称" : "航程", order.title);
-  row("行程摘要", order.subtitle);
+  row(order.productType === "hotel" ? "Hotel Name" : "Route", order.title);
+  row("Trip Summary", order.subtitle);
   if (order.productType === "hotel") {
     const checkIn = text(product.checkInDate);
     const checkOut = text(product.checkOutDate);
     const rooms = positiveNumber(product.roomNum);
     const nights = positiveNumber(product.nights);
-    row("入住 / 退房", checkIn && checkOut ? `${checkIn} / ${checkOut}` : "上游未提供");
-    row("房型 / 价格计划", [text(product.roomName), text(product.ratePlanName)].filter(Boolean).join(" / ") || "上游未提供");
-    row("房间 / 晚数 / 人数", [rooms ? `${rooms}间` : "", nights ? `${nights}晚` : "", positiveNumber(product.numberOfAdults) ? `${positiveNumber(product.numberOfAdults)}位成人` : ""].filter(Boolean).join(" / ") || "上游未提供");
+    row("Check-in / Check-out", checkIn && checkOut ? `${checkIn} / ${checkOut}` : "Not provided by supplier");
+    row("Room Type / Rate Plan", [text(product.roomName), text(product.ratePlanName)].filter(Boolean).join(" / ") || "Not provided by supplier");
+    row("Rooms / Nights / Guests", [rooms ? `${rooms} rooms` : "", nights ? `${nights} nights` : "", positiveNumber(product.numberOfAdults) ? `${positiveNumber(product.numberOfAdults)} adults` : ""].filter(Boolean).join(" / ") || "Not provided by supplier");
   } else {
     const journeys = array(product.journeys).map(record);
     const flightNos = journeys.map(item => text(item.flightNo)).filter(Boolean).join(" / ") || text(product.flightNo);
-    row("航班号", shown(flightNos));
-    row("舱等", shown(product.cabin));
-    row("托运行李", shown(product.baggage));
+    row("Flight Number", shown(flightNos));
+    row("Cabin Class", shown(product.cabin));
+    row("Baggage Allowance", shown(product.baggage));
   }
   y += 20;
 
-  sectionTitle(order.productType === "hotel" ? "入住人与联系人" : "乘机人与联系人");
+  sectionTitle(order.productType === "hotel" ? "Guests & Contact" : "Passengers & Contact");
   const people = order.productType === "hotel" ? guests : passengers;
   const peopleHeight = Math.max(105, 78 + Math.max(1, people.length) * 19);
   cardStart(peopleHeight);
@@ -197,31 +197,31 @@ export async function createOrderDocumentPdf(input: {
       const name = order.productType === "hotel"
         ? [text(person.lastName), text(person.firstName)].filter(Boolean).join(" ")
         : [text(person.surname), text(person.name)].filter(Boolean).join("/");
-      const identity = order.productType === "flight" ? `（证件 ${maskDocument(person.idNumber)}）` : "";
-      row(`${order.productType === "hotel" ? `房间 ${positiveNumber(person.roomIndex) || index + 1}` : `乘机人 ${index + 1}`}`, `${name || "上游未提供"}${identity}`);
+      const identity = order.productType === "flight" ? ` (Document ${maskDocument(person.idNumber)})` : "";
+      row(`${order.productType === "hotel" ? `Room ${positiveNumber(person.roomIndex) || index + 1}` : `Passenger ${index + 1}`}`, `${name || "Not provided by supplier"}${identity}`);
     });
   } else {
-    row(order.productType === "hotel" ? "入住人" : "乘机人", "上游未提供");
+    row(order.productType === "hotel" ? "Guest" : "Passenger", "Not provided by supplier");
   }
-  row("联系人", shown([text(contact.surname), text(contact.givenName)].filter(Boolean).join(" ") || contact.name));
-  row("手机 / 邮箱", [text(contact.phone), text(contact.email)].filter(Boolean).join(" / ") || "上游未提供");
+  row("Contact", shown([text(contact.surname), text(contact.givenName)].filter(Boolean).join(" ") || contact.name));
+  row("Phone / Email", [text(contact.phone), text(contact.email)].filter(Boolean).join(" / ") || "Not provided by supplier");
   y += 18;
 
-  sectionTitle("金额与服务说明");
+  sectionTitle("Amount & Service Details");
   cardStart(112);
-  row("订单金额", money(order.amount, order.currency));
+  row("Order Amount", money(order.amount, order.currency));
   if (order.productType === "hotel") {
-    row("早餐", shown(product.breakfast));
-    row("取消政策", shown(product.cancelPolicy));
+    row("Breakfast", shown(product.breakfast));
+    row("Cancellation Policy", shown(product.cancelPolicy));
   } else {
-    row("退票 / 改签", "以 F-Link 及航司实时核算结果为准");
-    row("票务状态", status);
+    row("Refund / Exchange", "Subject to F-Link and airline real-time calculation");
+    row("Ticketing Status", status);
   }
 
   const footerY = doc.page.height - 76;
   doc.moveTo(42, footerY).lineTo(pageWidth - 42, footerY).strokeColor(line).stroke();
   doc.fillColor(muted).font("FG-Regular").fontSize(7.5)
-    .text("本凭证仅用于订单信息核对，不代替增值税发票。最终以订单中心最新供应商状态为准。", 42, footerY + 13, {
+    .text("This voucher is for order verification only and does not replace a VAT invoice. Final status is subject to the latest supplier status in Bookings.", 42, footerY + 13, {
       width: contentWidth - 105,
       lineBreak: false,
       ellipsis: true,

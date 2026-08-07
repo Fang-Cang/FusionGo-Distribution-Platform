@@ -36,6 +36,7 @@ describe("FusionDatabase persistence", () => {
     first.insertOrder({
       order,
       supplier: "GLINK",
+      userId: "test-user",
       productSnapshot: hotel,
       contactSnapshot: { name: "TEST USER" },
     });
@@ -43,8 +44,8 @@ describe("FusionDatabase persistence", () => {
     first.updateAccountProfile({
       name: "头像测试用户",
       language: "en",
-      phone: "13800008866",
-      email: "avatar@example.com",
+      phone: "138******66",
+      email: "a****@***********",
     });
     first.saveAccountAvatar(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), "image/png");
     first.updateNotificationPreferences({ order: false, flight: true, marketing: true });
@@ -74,7 +75,7 @@ describe("FusionDatabase persistence", () => {
     expect(readFileSync(path).includes(Buffer.from("P99887766"))).toBe(false);
 
     const reopened = new FusionDatabase(path);
-    expect(reopened.findOrder(order.id)?.status).toBe("PROCESSING");
+    expect(reopened.findOrder(order.id, "test-user")?.status).toBe("PROCESSING");
     expect(reopened.listOrderEvents(order.id).map(event => event.eventType))
       .toEqual(["ORDER_CREATED", "PAYMENT_ACCEPTED"]);
     expect(reopened.getAccountProfile()).toMatchObject({

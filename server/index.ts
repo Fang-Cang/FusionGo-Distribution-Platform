@@ -108,7 +108,7 @@ app.use((req, res, next) => {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     if (!req.secure) return res.status(426).json({
       code: "HTTPS_REQUIRED",
-      message: "生产环境涉及个人资料的请求必须通过 HTTPS 传输",
+      message: "Production requests involving personal data must use HTTPS",
     });
   }
   next();
@@ -134,14 +134,14 @@ app.use((req, res, next) => {
     && isSupplierCommerceRequest(req.method, req.path)) {
     return res.status(503).json({
       code: "REAL_SUPPLIER_DATA_REQUIRED",
-      message: "当前运行模式没有连接 G-Link/F-Link，已禁止使用模拟商品、报价和订单数据",
+      message: "Current mode has no G-Link/F-Link connection. Simulated products, quotes, and order data are prohibited.",
     });
   }
   next();
 });
 
 const ok = <T>(data: T) => ({ code: "SUCCESS", message: "ok", requestId: randomUUID(), data });
-const findOrder = (id: string) => database.findOrder(id);
+const findOrder = (id: string, userId?: string) => database.findOrder(id, userId);
 const localOrderId = () => database.nextOrderId();
 const coOrderCode = () => `OPFG${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
 const hotelNightCount = (checkInDate: string, checkOutDate: string) => Math.max(
@@ -163,7 +163,7 @@ const simulatedHotelOffer = (quote: HotelQuoteContext): HotelOffer => {
     city: quote.city || template.city,
     district: quote.district || template.district,
     image: quote.image || template.image,
-    tags: ["沙箱模拟房态", "非实时库存", ...(quote.tags || [])].slice(0, 4),
+    tags: ["Sandbox Simulation", "Non-real-time Inventory", ...(quote.tags || [])].slice(0, 4),
     roomName: template.roomName,
     breakfast: template.breakfast,
     cancelPolicy: template.cancelPolicy,
@@ -263,12 +263,12 @@ const requireAuthenticated: express.RequestHandler = (req, res, next) => {
   if (isAuthenticated(req)) return next();
   return res.status(401).json({
     code: "AUTH_REQUIRED",
-    message: "请先登录后再访问账户资料或提交预订",
+    message: "Please sign in before accessing account or booking",
   });
 };
 const requireAdmin: express.RequestHandler = (req, res, next) => {
   if (authUserId(req) === "user-demo") return next();
-  return res.status(403).json({ code: "ADMIN_REQUIRED", message: "当前账号没有运营管理权限" });
+  return res.status(403).json({ code: "ADMIN_REQUIRED", message: "Current account does not have admin permissions" });
 };
 
 app.get("/api/health", (_req, res) => res.json(ok({
@@ -280,7 +280,7 @@ app.get("/api/fx/rates", async (_req, res) => {
   try {
     res.json(ok(await getDisplayFxRates()));
   } catch (error) {
-    res.status(502).json({ code: "FX_RATE_UNAVAILABLE", message: error instanceof Error ? error.message : "汇率服务暂时不可用" });
+    res.status(502).json({ code: "FX_RATE_UNAVAILABLE", message: error instanceof Error ? error.message : "Exchange rate service temporarily unavailable" });
   }
 });
 app.get("/api/ready", (_req, res) => {
@@ -308,14 +308,14 @@ app.post("/api/auth/login", (req, res) => {
   if (runtime.mode === "production" || authMode === "external") {
     return res.status(501).json({
       code: "EXTERNAL_LOGIN_REQUIRED",
-      message: "生产环境必须接入企业统一身份认证后才能登录",
+      message: "Production requires enterprise SSO for login",
     });
   }
   const parsed = z.object({ email: z.string().email(), password: z.string().min(8).max(72) }).safeParse(req.body || {});
   const userId = parsed.success
     ? database.authenticateLocalAccount(parsed.data.email, parsed.data.password)
     : "user-demo";
-  if (!userId) return res.status(401).json({ code: "INVALID_CREDENTIALS", message: "邮箱或密码不正确" });
+  if (!userId) return res.status(401).json({ code: "INVALID_CREDENTIALS", message: "Invalid email or password" });
   const profile = database.getAccountProfile(userId);
   res.setHeader("Set-Cookie", authCookie(database.createLocalAuthSession(userId)));
   return res.json(ok({ authenticated: true, mode: authMode, user: { id: profile.id, name: profile.name, email: profile.email, role: userId === "user-demo" ? "admin" as const : "member" as const } }));
@@ -324,13 +324,13 @@ const internationalPhoneSchema = z.string().trim().min(1).max(30).refine(value =
   if (!/^\+?[0-9 ()-]+$/.test(value)) return false;
   const digitCount = value.replace(/\D/g, "").length;
   return digitCount >= 7 && digitCount <= 15;
-}, "电话号码必须包含 7–15 位数字，可选使用国家码、空格、短横线或括号");
+}, "Phone number must contain 7-15 digits; country code, spaces, hyphens, and parentheses are optional");
 
 app.post("/api/auth/register", (req, res) => {
   if (runtime.mode === "production" || authMode === "external") {
     return res.status(501).json({
       code: "EXTERNAL_REGISTRATION_REQUIRED",
-      message: "生产环境必须通过企业统一身份系统创建账号",
+      message: "Production requires enterprise identity system for account creation",
     });
   }
   const parsed = z.object({
@@ -339,17 +339,17 @@ app.post("/api/auth/register", (req, res) => {
     email: z.string().trim().email().max(120),
     phone: internationalPhoneSchema,
     password: z.string().min(8).max(72)
-      .regex(/[A-Za-z]/, "密码必须包含字母")
-      .regex(/[0-9]/, "密码必须包含数字"),
+      .regex(/[A-Za-z]/, "Password must contain letters")
+      .regex(/[0-9]/, "Password must contain digits"),
     language: z.enum(["zh-CN", "zh-TW", "en"]).default("en"),
     acceptedTerms: z.literal(true),
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({
     code: "INVALID_REGISTRATION",
-    message: parsed.error.issues[0]?.message || "注册资料格式不正确",
+    message: parsed.error.issues[0]?.message || "Registration details are invalid",
   });
   const profile = database.createLocalAccount(parsed.data);
-  if (!profile) return res.status(409).json({ code: "EMAIL_ALREADY_REGISTERED", message: "该邮箱已经注册，请直接登录" });
+  if (!profile) return res.status(409).json({ code: "EMAIL_ALREADY_REGISTERED", message: "This email is already registered. Please sign in directly." });
   res.setHeader("Set-Cookie", authCookie(database.createLocalAuthSession(profile.id)));
   return res.status(201).json(ok({ authenticated: true, mode: authMode, user: { id: profile.id, name: profile.name, email: profile.email, role: "member" as const } }));
 });
@@ -377,7 +377,7 @@ app.get("/api/reference/nationalities", async (req, res) => {
   const parsed = z.enum(["zh-CN", "zh-TW", "en"]).safeParse(req.query.locale || "zh-CN");
   if (!parsed.success) return res.status(400).json({
     code: "INVALID_LOCALE",
-    message: "国籍列表语言仅支持 zh-CN、zh-TW 或 en",
+    message: "Nationality locale only supports zh-CN, zh-TW, or en",
   });
   const locale = parsed.data;
   const cached = nationalityCatalogCache.get(locale);
@@ -392,7 +392,7 @@ app.get("/api/reference/nationalities", async (req, res) => {
         en: "en",
       }[locale] as "zh_CN" | "zh_TW" | "en";
       const supplierItems = await listFlinkNationalities(runtime.flink, supplierLang);
-      if (!supplierItems.length) throw new Error("F-Link 返回空国籍列表");
+      if (!supplierItems.length) throw new Error("F-Link returned an empty nationality list");
       const items = mergeSupplierNationalities(supplierItems);
       value = {
         items,
@@ -408,8 +408,8 @@ app.get("/api/reference/nationalities", async (req, res) => {
         count: items.length,
         fetchedAt: new Date().toISOString(),
         warning: error instanceof Error
-          ? `F-Link 国籍基础数据暂不可用，当前展示完整 ISO 3166 枚举：${error.message}`
-          : "F-Link 国籍基础数据暂不可用，当前展示完整 ISO 3166 枚举",
+          ? `F-Link nationality data is temporarily unavailable. Showing the full ISO 3166 enumeration: ${error.message}`
+          : "F-Link nationality data is temporarily unavailable. Showing the full ISO 3166 enumeration.",
       };
     }
   } else {
@@ -420,8 +420,8 @@ app.get("/api/reference/nationalities", async (req, res) => {
       count: items.length,
       fetchedAt: new Date().toISOString(),
       warning: runtime.mode === "mock"
-        ? "本地 mock 模式未调用 F-Link，当前展示完整 ISO 3166 枚举"
-        : "F-Link 凭证未配置，当前展示完整 ISO 3166 枚举",
+        ? "Local mock mode does not call F-Link. Showing the full ISO 3166 enumeration."
+        : "F-Link credentials are not configured. Showing the full ISO 3166 enumeration.",
     };
   }
   nationalityCatalogCache.set(locale, {
@@ -463,7 +463,7 @@ app.patch("/api/account/profile", (req, res) => {
     phone: internationalPhoneSchema,
     email: z.string().email().max(120),
   }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PROFILE", message: "个人资料格式不正确" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PROFILE", message: "Profile details are invalid" });
   database.updateAccountProfile(parsed.data, authUserId(req)!);
   return res.json(ok(accountProfileResponse(req)));
 });
@@ -473,7 +473,7 @@ app.put(
   (req, res) => {
     const mime = String(req.headers["content-type"] || "").split(";", 1)[0] as "image/png" | "image/jpeg";
     const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    if (!bytes.length) return res.status(400).json({ code: "AVATAR_EMPTY", message: "请选择需要保存的头像图片" });
+    if (!bytes.length) return res.status(400).json({ code: "AVATAR_EMPTY", message: "Please select an avatar image to upload" });
     const isPng = mime === "image/png"
       && bytes.length >= 8
       && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
@@ -482,7 +482,7 @@ app.put(
       && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
     if (!isPng && !isJpeg) return res.status(415).json({
       code: "AVATAR_TYPE_INVALID",
-      message: "头像内容不是有效的 PNG 或 JPG 图片",
+      message: "Avatar content is not a valid PNG or JPG image",
     });
     database.saveAccountAvatar(bytes, mime, authUserId(req)!);
     return res.json(ok(accountProfileResponse(req)));
@@ -492,7 +492,7 @@ app.get("/api/account/profile/avatar", (req, res) => {
   const avatar = database.getAccountAvatar(authUserId(req)!);
   if (!avatar?.avatar_blob || !avatar.avatar_mime) return res.status(404).json({
     code: "AVATAR_NOT_FOUND",
-    message: "尚未保存个人头像",
+    message: "No avatar has been saved yet",
   });
   res.setHeader("Content-Type", avatar.avatar_mime);
   res.setHeader("Content-Length", String(avatar.avatar_blob.byteLength));
@@ -517,7 +517,7 @@ app.post("/api/account/travelers", (req, res) => {
   const parsed = z.object({ ...travelerFields, documentNo: passportNumber }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({
     code: "INVALID_TRAVELER",
-    message: "常用旅客或护照信息格式不正确",
+    message: "Frequent traveler or passport information is invalid",
   });
   return res.status(201).json(ok(database.createAccountTraveler(parsed.data, authUserId(req)!)));
 });
@@ -525,15 +525,15 @@ app.patch("/api/account/travelers/:travelerId", (req, res) => {
   const parsed = z.object({ ...travelerFields, documentNo: passportNumber.optional() }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({
     code: "INVALID_TRAVELER",
-    message: "常用旅客或护照信息格式不正确",
+    message: "Frequent traveler or passport information is invalid",
   });
   const traveler = database.updateAccountTraveler(req.params.travelerId, parsed.data, authUserId(req)!);
-  if (!traveler) return res.status(404).json({ code: "TRAVELER_NOT_FOUND", message: "常用旅客不存在" });
+  if (!traveler) return res.status(404).json({ code: "TRAVELER_NOT_FOUND", message: "Frequent traveler not found" });
   return res.json(ok(traveler));
 });
 app.delete("/api/account/travelers/:travelerId", (req, res) => {
   if (!database.deleteAccountTraveler(req.params.travelerId, authUserId(req)!)) {
-    return res.status(404).json({ code: "TRAVELER_NOT_FOUND", message: "常用旅客不存在" });
+    return res.status(404).json({ code: "TRAVELER_NOT_FOUND", message: "Frequent traveler not found" });
   }
   return res.json(ok({ deleted: true as const }));
 });
@@ -543,7 +543,7 @@ app.patch("/api/account/notifications", (req, res) => {
   const parsed = z.object({ order: z.boolean(), flight: z.boolean(), marketing: z.boolean() }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({
     code: "INVALID_NOTIFICATION_PREFERENCES",
-    message: "通知偏好格式不正确",
+    message: "Notification preferences are invalid",
   });
   return res.json(ok(database.updateNotificationPreferences(parsed.data, authUserId(req)!)));
 });
@@ -574,20 +574,20 @@ app.post("/api/account/hotel-favorites", (req, res) => {
   const parsed = z.object({ hotel: favoriteHotelSchema }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({
     code: "INVALID_HOTEL_FAVORITE",
-    message: "收藏酒店资料不完整",
+    message: "Favorite hotel details are incomplete",
   });
   if (parsed.data.hotel.inventorySource === "simulation"
     || (process.env.NODE_ENV !== "test" && parsed.data.hotel.inventorySource !== "glink")) {
     return res.status(422).json({
       code: "REAL_HOTEL_REQUIRED",
-      message: "只能收藏 G-Link 真实接口返回的酒店",
+      message: "Only hotels returned by the real G-Link API can be favorited",
     });
   }
   return res.status(201).json(ok(database.addFavoriteHotel(parsed.data.hotel, authUserId(req)!)));
 });
 app.delete("/api/account/hotel-favorites/:hotelId", (req, res) => {
   if (!database.deleteFavoriteHotel(req.params.hotelId, authUserId(req)!)) {
-    return res.status(404).json({ code: "HOTEL_FAVORITE_NOT_FOUND", message: "该酒店尚未收藏" });
+    return res.status(404).json({ code: "HOTEL_FAVORITE_NOT_FOUND", message: "This hotel has not been favorited" });
   }
   return res.json(ok({ deleted: true as const }));
 });
@@ -606,15 +606,15 @@ app.post("/api/customers", (req, res) => {
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({
     code: "INVALID_PARAMS",
-    message: parsed.error.issues[0]?.message || "客户资料不完整",
+    message: parsed.error.issues[0]?.message || "Customer details are incomplete",
   });
   return res.status(201).json(ok(database.createCustomer(parsed.data)));
 });
 app.patch("/api/customers/:customerId/status", (req, res) => {
   const parsed = z.object({ status: z.enum(["ACTIVE", "SUSPENDED"]) }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "客户状态不正确" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Customer status is invalid" });
   const customer = database.updateCustomerStatus(req.params.customerId, parsed.data.status);
-  if (!customer) return res.status(404).json({ code: "CUSTOMER_NOT_FOUND", message: "客户不存在" });
+  if (!customer) return res.status(404).json({ code: "CUSTOMER_NOT_FOUND", message: "Customer not found" });
   return res.json(ok(customer));
 });
 
@@ -630,15 +630,15 @@ app.post("/api/pricing-rules", (req, res) => {
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({
     code: "INVALID_PARAMS",
-    message: parsed.error.issues[0]?.message || "定价规则不完整",
+    message: parsed.error.issues[0]?.message || "Pricing rule is incomplete",
   });
   return res.status(201).json(ok(database.createPricingRule(parsed.data)));
 });
 app.patch("/api/pricing-rules/:ruleId/status", (req, res) => {
   const parsed = z.object({ status: z.enum(["ACTIVE", "INACTIVE"]) }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "规则状态不正确" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Rule status is invalid" });
   const rule = database.updatePricingRuleStatus(req.params.ruleId, parsed.data.status);
-  if (!rule) return res.status(404).json({ code: "PRICING_RULE_NOT_FOUND", message: "定价规则不存在" });
+  if (!rule) return res.status(404).json({ code: "PRICING_RULE_NOT_FOUND", message: "Pricing rule not found" });
   return res.json(ok(rule));
 });
 
@@ -655,19 +655,19 @@ app.post("/api/hotels/search", async (req, res) => {
     childAges: z.array(z.number().int().min(0).max(17)).max(8).default([]),
   }).superRefine((value, context) => {
     if (value.checkIn < applicationDate()) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "入住日期不能早于今天" });
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Check-in date cannot be earlier than today" });
     }
     if (value.checkOut <= value.checkIn) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "退房日期必须晚于入住日期" });
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Check-out date must be later than the check-in date" });
     }
     if (value.adults < value.rooms) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "每间房至少需要一位成人" });
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Each room requires at least one adult" });
     }
     if (value.children !== value.childAges.length) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "儿童年龄数量必须与儿童人数一致" });
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "The number of child ages must match the number of children" });
     }
   }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "请填写完整搜索条件" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Please fill in the complete search criteria" });
   if (runtime.mode === "mock") {
     const nights = hotelNightCount(parsed.data.checkIn, parsed.data.checkOut);
     return res.json(ok(database.listHotels(parsed.data.destination).map(offer => {
@@ -692,11 +692,11 @@ app.post("/api/hotels/search", async (req, res) => {
   const result = await searchGlinkHotels(runtime.glink, parsed.data);
   if (!result.diagnostics.saleableHotelCount) return res.status(409).json({
     code: "GLINK_CATALOG_EMPTY",
-    message: "当前 G-Link 沙箱账号没有已映射的可售酒店，请先由供应商配置测试酒店和库存",
+    message: "The current G-Link sandbox account has no mapped saleable hotels. Please ask the supplier to configure test hotels and inventory first.",
   });
   if (!result.diagnostics.lowestPriceHotelCount) return res.status(409).json({
     code: "GLINK_LOWEST_PRICE_EMPTY",
-    message: "已映射酒店在当前入住日期没有返回每日最低价，酒店列表不会展示",
+    message: "Mapped hotels did not return daily lowest prices for the selected check-in date. The hotel list will not be displayed.",
   });
   result.quotes.forEach(quote => hotelQuotes.set(quote.id, quote));
   return res.json(ok(result.offers.map(offer => ({
@@ -706,17 +706,95 @@ app.post("/api/hotels/search", async (req, res) => {
   }))));
 });
 
+app.post("/api/hotels/destination", async (req, res, next) => {
+  const parsed = z.object({ keyword: z.string().min(2) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Keyword must be at least 2 characters" });
+  // Destination keyword lookup is a read-only metadata search. When G-Link
+  // credentials are available we always call the real supplier, even in mock
+  // mode, so the UI can browse the real destination index. The mock list is
+  // only a fallback when no credentials are configured.
+  if (runtime.glinkConfigured) {
+    try {
+      const raw = await runtime.glink.glink<unknown>("/search/destination", {
+        keyWord: parsed.data.keyword,
+        destinationType: "2",
+        source: 0,
+      });
+      const items = Array.isArray(raw) ? raw : [];
+      const destinations = items.map((item: any) => ({
+        name: item.cityName || item.destinationName || item.name || "",
+        detail: [item.countryName, item.provinceName].filter(Boolean).join(" · "),
+        destinationId: String(item.destinationId || ""),
+        cityCode: String(item.cityCode || ""),
+      })).filter(d => d.destinationId);
+      return res.json(ok(destinations));
+    } catch (error) {
+      next(error);
+      return;
+    }
+  }
+  const mockDestinations = [
+    { name: "Shanghai", detail: "China · Business & Leisure", destinationId: "SHA", cityCode: "SHA" },
+    { name: "Hong Kong", detail: "Hong Kong, China · Harbor City", destinationId: "HKG", cityCode: "HKG" },
+    { name: "Beijing", detail: "China · Historic Capital", destinationId: "BJS", cityCode: "BJS" },
+    { name: "Shenzhen", detail: "China · Greater Bay Area", destinationId: "SZX", cityCode: "SZX" },
+    { name: "Bangkok", detail: "Thailand · Popular International Destination", destinationId: "BKK", cityCode: "BKK" },
+  ];
+  const normalized = parsed.data.keyword.trim().toLowerCase();
+  const filtered = mockDestinations.filter(d => `${d.name}${d.detail}`.toLowerCase().includes(normalized));
+  return res.json(ok(filtered));
+});
+
+app.post("/api/hotels/by-id", async (req, res, next) => {
+  const parsed = z.object({ hotelId: z.string().min(1), hotelName: z.string().optional() }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Missing hotel identifier" });
+  if (runtime.mode === "mock") {
+    const hotels = database.listHotels(parsed.data.hotelName || parsed.data.hotelId);
+    const hotel = hotels.find(h => h.id === parsed.data.hotelId) || hotels[0];
+    if (!hotel) throw new Error("Hotel not found");
+    return res.json(ok(hotel));
+  }
+  try {
+    const detailRaw = await runtime.glink.glink<unknown>("/hotel/detail", {
+      hotelIds: [parsed.data.hotelId],
+      language: "zh-CN",
+      settings: { isNeedStaticInfo: true },
+    });
+    const detailItem = Array.isArray(detailRaw) ? detailRaw[0] : (detailRaw as any)?.hotelList?.[0] || (detailRaw as any);
+    if (!detailItem) throw new Error("Hotel not found by supplier");
+    const hotelOffer = {
+      id: parsed.data.hotelId,
+      name: detailItem.hotelName || parsed.data.hotelName || "Unknown Hotel",
+      city: detailItem.cityName || "",
+      cityCode: detailItem.cityCode || "",
+      district: detailItem.districtName || detailItem.businessDistrictName || "",
+      rating: detailItem.starRating ? Number(detailItem.starRating) : undefined,
+      stars: detailItem.starRating ? Math.round(Number(detailItem.starRating)) : undefined,
+      image: detailItem.imageUrl || (Array.isArray(detailItem.images) ? detailItem.images[0]?.url : undefined),
+      tags: [],
+      roomName: "",
+      breakfast: "",
+      cancelPolicy: "",
+      nightlyPrice: 0,
+      currency: "CNY",
+    };
+    return res.json(ok(hotelOffer));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/hotels/filters", async (req, res) => {
   const parsed = z.object({ destinationId: z.string().min(1) }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "缺少目的地标识" });
-  if (runtime.mode === "mock") return res.json(ok({ stars: [3, 4, 5], facilities: ["免费 Wi-Fi", "停车场", "健身中心"] }));
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Missing destination identifier" });
+  if (runtime.mode === "mock") return res.json(ok({ stars: [3, 4, 5], facilities: ["Free Wi-Fi", "Parking", "Fitness Center"] }));
   const filters = await runtime.glink.glink<unknown>("/search/hotelFilters", { destinationId: parsed.data.destinationId, language: "zh-CN", distance: 10 });
   return res.json(ok(filters));
 });
 
 app.post("/api/integration/glink/hotel-increment", async (req, res) => {
   const parsed = z.object({ startTime: z.string().min(1), endTime: z.string().min(1), maxId: z.number().int().min(0).default(0), pageSize: z.number().int().min(100).max(1000).default(100) }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "增量同步时间范围不正确" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Incremental sync time range is invalid" });
   if (runtime.mode === "mock") return res.json(ok({ list: [], maxId: parsed.data.maxId }));
   const changes = await runtime.glink.glink<unknown>("/hotel/increment", { ...parsed.data, language: "zh-CN" });
   return res.json(ok(changes));
@@ -730,11 +808,11 @@ app.post("/api/integration/glink/lowest-prices", async (req, res) => {
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({
     code: "INVALID_PARAMS",
-    message: "hotelIds 最多10个，且入住离店日期必须为 yyyy-MM-dd",
+    message: "hotelIds allows up to 10 entries, and check-in/check-out dates must be in yyyy-MM-dd format",
   });
   if (runtime.mode === "mock") return res.status(409).json({
     code: "REAL_INTEGRATION_REQUIRED",
-    message: "当前为 mock 模式，无法调用 G-Link 每日起价",
+    message: "Currently in mock mode. Cannot call G-Link daily lowest prices.",
   });
   const result = await queryGlinkLowestPrices(runtime.glink, parsed.data);
   return res.json(ok({
@@ -748,10 +826,10 @@ app.post("/api/integration/glink/lowest-prices", async (req, res) => {
 
 app.post("/api/hotels/product-details", async (req, res) => {
   const parsed = z.object({ offerId: z.string().min(1) }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "缺少酒店报价标识" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Missing hotel quote identifier" });
   if (runtime.mode === "mock") {
     const offer = database.findHotel(parsed.data.offerId);
-    if (!offer) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "酒店报价已失效" });
+    if (!offer) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "Hotel quote has expired" });
     return res.json(ok([{
       ...offer,
       ...hotelStayContexts.get(offer.id),
@@ -765,7 +843,7 @@ app.post("/api/hotels/product-details", async (req, res) => {
     }]));
   }
   const quote = hotelQuotes.get(parsed.data.offerId);
-  if (!quote) return res.status(410).json({ code: "QUOTE_EXPIRED", message: "酒店搜索会话已失效，请重新搜索" });
+  if (!quote) return res.status(410).json({ code: "QUOTE_EXPIRED", message: "Hotel search session has expired. Please search again." });
   try {
     const hydratedProducts = await hydrateGlinkProducts(runtime.glink, quote);
     hydratedProducts.forEach(product => hotelQuotes.set(product.quote.id, product.quote));
@@ -784,7 +862,7 @@ app.post("/api/hotels/product-details", async (req, res) => {
 
 app.post("/api/hotels/availability", async (req, res) => {
   const parsed = z.object({ offerId: z.string().min(1) }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "缺少房型报价标识" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Missing room quote identifier" });
   const simulatedOffer = simulatedHotelOffers.get(parsed.data.offerId);
   if (simulatedOffer) {
     const amount = database.calculateSaleAmount("hotel", simulatedOffer.totalPrice || simulatedOffer.nightlyPrice);
@@ -805,7 +883,7 @@ app.post("/api/hotels/availability", async (req, res) => {
   }
   if (runtime.mode === "mock") {
     const hotel = database.findHotel(parsed.data.offerId);
-    if (!hotel) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "房型报价已失效，请重新搜索" });
+    if (!hotel) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "Room quote has expired. Please search again." });
     const context = hotelStayContexts.get(hotel.id) || {
       checkInDate: "2026-08-12",
       checkOutDate: "2026-08-14",
@@ -825,12 +903,12 @@ app.post("/api/hotels/availability", async (req, res) => {
     }));
   }
   const quote = hotelQuotes.get(parsed.data.offerId);
-  if (!quote) return res.status(410).json({ code: "QUOTE_EXPIRED", message: "房型报价已过期，请重新进入酒店详情" });
+  if (!quote) return res.status(410).json({ code: "QUOTE_EXPIRED", message: "Room quote has expired. Please re-enter the hotel details." });
   const availability = await checkGlinkAvailability(runtime.glink, quote);
   const synchronizedQuote = synchronizeHotelQuoteFromAvailability(quote, availability);
   hotelQuotes.set(parsed.data.offerId, synchronizedQuote);
   const supplierAmount = fcgValue.number(availability.totalSalePrice);
-  if (supplierAmount <= 0) throw new FcgError("G-Link 验房未返回有效总价", "GLINK_INVALID_AVAILABILITY_PRICE", 422);
+  if (supplierAmount <= 0) throw new FcgError("G-Link availability check did not return a valid total price", "GLINK_INVALID_AVAILABILITY_PRICE", 422);
   const amount = database.calculateSaleAmount("hotel", supplierAmount);
   const session = database.saveGlinkHotelAvailability({
     offerId: parsed.data.offerId,
@@ -860,12 +938,12 @@ app.post("/api/hotels/availability", async (req, res) => {
     ...(synchronizedQuote.specialCheckInInstructions?.length ? { specialCheckInInstructions: synchronizedQuote.specialCheckInInstructions } : {}),
     payAtHotel: synchronizedQuote.payAtHotelFlag === 1,
     paymentTiming: synchronizedQuote.payAtHotelFlag === 1
-      ? "由酒店在到店或退房时向旅客收取"
-      : "提交订单后由 FusionGo 企业授信账户支付",
-    paymentProcessor: synchronizedQuote.payAtHotelFlag === 1 ? "预订酒店" : "FusionGo 企业授信",
+      ? "Collected by the hotel from the traveler at check-in or check-out"
+      : "Paid via the FusionGo enterprise credit account after order submission",
+    paymentProcessor: synchronizedQuote.payAtHotelFlag === 1 ? "Booking Hotel" : "FusionGo Enterprise Credit",
     paymentProcessingLocation: synchronizedQuote.payAtHotelFlag === 1
-      ? "酒店所在地"
-      : "不适用：本订单非 Expedia Group MoR",
+      ? "Hotel location"
+      : "Not applicable: this order is not an Expedia Group MoR",
     ...(synchronizedQuote.priceBreakdown ? { priceBreakdown: {
       ...synchronizedQuote.priceBreakdown,
       total: amount,
@@ -893,28 +971,28 @@ app.post("/api/flights/search", async (req, res) => {
     const count = journeys.length;
     if (value.from.trim().toUpperCase() === value.to.trim().toUpperCase()
       || journeys.some(journey => journey.origin.trim().toUpperCase() === journey.destination.trim().toUpperCase())) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "出发地和目的地不能相同" });
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Origin and destination cannot be the same" });
     }
     if (journeys.some(journey => journey.date < applicationDate())) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "航班日期不能早于今天" });
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Flight date cannot be earlier than today" });
     }
     if (value.tripType === 2 && count !== 2) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "往返行程必须包含去程和返程" });
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Round-trip itineraries must include both outbound and return segments" });
     }
     if (value.tripType === 3 && count < 2) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "多程行程至少包含两段" });
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Multi-city itineraries must include at least two segments" });
     }
     if (journeys.some((journey, index) => index > 0 && journey.date < journeys[index - 1].date)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "后续航段日期不能早于前一航段" });
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Subsequent segment dates cannot be earlier than the previous segment" });
     }
     if (value.adults + value.children + value.infants > 9) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "单次预订旅客总数不能超过9人" });
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Total travelers per booking cannot exceed 9" });
     }
     if (value.infants > value.adults) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "每位成人最多携带一名婴儿" });
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Each adult may accompany at most one infant" });
     }
   }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "请填写完整航班条件" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Please fill in the complete flight criteria" });
   if (runtime.mode === "mock") return res.json(ok(database.listFlights().map(offer => ({
     ...offer,
     price: database.calculateSaleAmount("flight", offer.price),
@@ -931,10 +1009,10 @@ app.post("/api/flights/search", async (req, res) => {
 
 app.post("/api/flights/verify", async (req, res) => {
   const parsed = z.object({ offerId: z.string().min(1), priceKey: z.string().min(1), quantity: z.number().int().min(1).max(9) }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "验价参数不完整" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Verification parameters are incomplete" });
   if (runtime.mode === "mock") {
     const flight = database.findFlight(parsed.data.offerId);
-    if (!flight || flight.priceKey !== parsed.data.priceKey) return res.status(409).json({ code: "PRICE_KEY_EXPIRED", message: "运价已变化，请重新搜索" });
+    if (!flight || flight.priceKey !== parsed.data.priceKey) return res.status(409).json({ code: "PRICE_KEY_EXPIRED", message: "Fare has changed. Please search again." });
     const verified = database.saveFlightVerification(
       flight,
       parsed.data.quantity,
@@ -949,14 +1027,14 @@ app.post("/api/flights/verify", async (req, res) => {
     }));
   }
   const quote = flightQuotes.get(parsed.data.offerId);
-  if (!quote || quote.priceKey !== parsed.data.priceKey) return res.status(410).json({ code: "PRICE_KEY_EXPIRED", message: "priceKey 已失效，请重新搜索" });
+  if (!quote || quote.priceKey !== parsed.data.priceKey) return res.status(410).json({ code: "PRICE_KEY_EXPIRED", message: "priceKey has expired. Please search again." });
   let verified;
   try {
     verified = await verifyFlinkFlight(runtime.flink, quote);
   } catch (error) {
     const priceChanged = error instanceof FcgError
       && error.code === "SUPPLIER_BIZ_ERROR"
-      && /价格已更新|price.+updated/i.test(error.message);
+      && /price has been updated|price.+updated/i.test(error.message);
     if (!priceChanged) throw error;
     const refreshed = await refreshFlinkCabin(runtime.flink, quote);
     let latestError: unknown;
@@ -982,7 +1060,7 @@ app.post("/api/flights/verify", async (req, res) => {
 
 const glinkEnglishName = z.string().trim().min(1).regex(
   /^[A-Za-z]+(?: [A-Za-z]+)*$/,
-  "酒店入住人英文姓名只能包含英文字母和空格",
+  "Hotel guest English name may only contain letters and spaces",
 );
 const hotelOrderSchema = z.object({
   productType: z.literal("hotel"),
@@ -1026,16 +1104,24 @@ const flightOrderSchema = z.object({
 
 const orderSchema = z.discriminatedUnion("productType", [hotelOrderSchema, flightOrderSchema]);
 
-app.get("/api/orders", (_req, res) => res.json(ok(database.listOrders())));
+app.get("/api/orders", (req, res) => {
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  return res.json(ok(database.listOrders(userId)));
+});
 app.get("/api/orders/:orderId", (req, res) => {
-  const order = findOrder(req.params.orderId);
-  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "订单不存在" });
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const order = findOrder(req.params.orderId, userId);
+  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "Order not found" });
   return res.json(ok(order));
 });
 app.get("/api/orders/:orderId/details", (req, res) => {
-  const order = findOrder(req.params.orderId);
-  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "订单不存在" });
-  const snapshots = database.getOrderSnapshots(order.id);
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const order = findOrder(req.params.orderId, userId);
+  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "Order not found" });
+  const snapshots = database.getOrderSnapshots(order.id, userId);
   const contactSnapshot = fcgValue.record(snapshots?.contact);
   const contact = fcgValue.record(contactSnapshot.contact);
   const passengers = fcgValue.array(contactSnapshot.passengers).map(fcgValue.record);
@@ -1071,9 +1157,9 @@ app.get("/api/orders/:orderId/details", (req, res) => {
     phone: fcgValue.string(contact.phone),
     documentMasked,
     serviceSummary: order.productType === "flight"
-      ? (passengers.length ? `${passengers.length} 位乘机人` : "上游未返回乘机人数")
-      : [roomNum ? `${roomNum}间` : "", nights ? `${nights}晚` : "", numberOfAdults ? `${numberOfAdults}位成人` : ""]
-        .filter(Boolean).join(" · ") || "上游未返回完整住宿信息",
+      ? (passengers.length ? `${passengers.length} passenger(s)` : "Upstream did not return passenger count")
+      : [roomNum ? `${roomNum} room(s)` : "", nights ? `${nights} night(s)` : "", numberOfAdults ? `${numberOfAdults} adult(s)` : ""]
+        .filter(Boolean).join(" · ") || "Upstream did not return complete stay information",
     roomName: fcgValue.string(productSnapshot.roomName) || undefined,
     breakfast: fcgValue.string(productSnapshot.breakfast) || undefined,
     cancelPolicy: fcgValue.string(productSnapshot.cancelPolicy) || undefined,
@@ -1084,12 +1170,12 @@ app.get("/api/orders/:orderId/details", (req, res) => {
       .map(value => fcgValue.string(value)).filter(Boolean),
     payAtHotel: fcgValue.number(productSnapshot.payAtHotelFlag) === 1,
     paymentTiming: fcgValue.number(productSnapshot.payAtHotelFlag) === 1
-      ? "由酒店在到店或退房时向旅客收取"
-      : "提交订单后由 FusionGo 企业授信账户支付",
-    paymentProcessor: fcgValue.number(productSnapshot.payAtHotelFlag) === 1 ? "预订酒店" : "FusionGo 企业授信",
+      ? "Collected by the hotel from the traveler at check-in or check-out"
+      : "Paid via the FusionGo enterprise credit account after order submission",
+    paymentProcessor: fcgValue.number(productSnapshot.payAtHotelFlag) === 1 ? "Booking Hotel" : "FusionGo Enterprise Credit",
     paymentProcessingLocation: fcgValue.number(productSnapshot.payAtHotelFlag) === 1
-      ? "酒店所在地"
-      : "不适用：本订单非 Expedia Group MoR",
+      ? "Hotel location"
+      : "Not applicable: this order is not an Expedia Group MoR",
     priceBreakdown: Object.keys(fcgValue.record(productSnapshot.priceBreakdown)).length
       ? fcgValue.record(productSnapshot.priceBreakdown)
       : undefined,
@@ -1114,25 +1200,27 @@ app.get("/api/orders/:orderId/details", (req, res) => {
 });
 app.get("/api/orders/:orderId/documents/:type", async (req, res, next) => {
   if (req.params.type === "email-preview") return next();
-  const order = findOrder(req.params.orderId);
-  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "订单不存在" });
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const order = findOrder(req.params.orderId, userId);
+  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "Order not found" });
   const type = z.enum(["confirmation", "receipt", "ticket"]).safeParse(req.params.type);
-  if (!type.success) return res.status(404).json({ code: "DOCUMENT_NOT_FOUND", message: "文档类型不存在" });
+  if (!type.success) return res.status(404).json({ code: "DOCUMENT_NOT_FOUND", message: "Document type not found" });
   if (type.data === "ticket" && (order.productType !== "flight" || order.status !== "TICKETED")) {
-    return res.status(409).json({ code: "TICKET_NOT_READY", message: "航司尚未出票，电子客票暂不可下载" });
+    return res.status(409).json({ code: "TICKET_NOT_READY", message: "The airline has not issued the ticket yet. The e-ticket is not available for download." });
   }
   if (type.data === "confirmation" && !["CONFIRMED", "TICKETED"].includes(order.status)) {
-    return res.status(409).json({ code: "CONFIRMATION_NOT_READY", message: "订单尚未确认，电子凭证暂不可下载" });
+    return res.status(409).json({ code: "CONFIRMATION_NOT_READY", message: "The order has not been confirmed yet. The e-voucher is not available for download." });
   }
   try {
     const pdf = await createOrderDocumentPdf({
       order,
       type: type.data,
-      snapshots: database.getOrderSnapshots(order.id),
+      snapshots: database.getOrderSnapshots(order.id, userId),
     });
     const documentName = type.data === "ticket" ? "ticket" : type.data === "receipt" ? "receipt" : "confirmation";
     const asciiFilename = `${order.id}-${documentName}.pdf`;
-    const localizedFilename = `${order.id}-${type.data === "ticket" ? "电子客票" : type.data === "receipt" ? "电子付款凭证" : "预订确认凭证"}.pdf`;
+    const localizedFilename = `${order.id}-${type.data === "ticket" ? "e-ticket" : type.data === "receipt" ? "e-receipt" : "booking-confirmation"}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Length", String(pdf.length));
     res.setHeader("Cache-Control", "private, no-store");
@@ -1141,18 +1229,20 @@ app.get("/api/orders/:orderId/documents/:type", async (req, res, next) => {
   } catch (error) {
     return res.status(503).json({
       code: "DOCUMENT_RENDER_FAILED",
-      message: error instanceof Error ? error.message : "电子凭证生成失败",
+      message: error instanceof Error ? error.message : "E-voucher generation failed",
     });
   }
 });
 app.get("/api/orders/:orderId/documents/email-preview", (req, res) => {
-  const order = findOrder(req.params.orderId);
-  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "订单不存在" });
-  if (order.productType !== "hotel") return res.status(409).json({ code: "HOTEL_EMAIL_ONLY", message: "当前模板仅用于酒店确认邮件" });
-  if (order.status !== "CONFIRMED") return res.status(409).json({ code: "CONFIRMATION_NOT_READY", message: "订单尚未确认，确认邮件暂不可生成" });
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const order = findOrder(req.params.orderId, userId);
+  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "Order not found" });
+  if (order.productType !== "hotel") return res.status(409).json({ code: "HOTEL_EMAIL_ONLY", message: "This template is only for hotel confirmation emails" });
+  if (order.status !== "CONFIRMED") return res.status(409).json({ code: "CONFIRMATION_NOT_READY", message: "The order has not been confirmed yet. The confirmation email is not available." });
   const html = createHotelConfirmationEmailHtml({
     order,
-    snapshots: database.getOrderSnapshots(order.id),
+    snapshots: database.getOrderSnapshots(order.id, userId),
     publicAppUrl: process.env.PUBLIC_APP_URL,
     supportEmail: process.env.CUSTOMER_SUPPORT_EMAIL,
     supportPhone: process.env.CUSTOMER_SUPPORT_PHONE,
@@ -1164,16 +1254,20 @@ app.get("/api/orders/:orderId/documents/email-preview", (req, res) => {
   return res.send(html);
 });
 app.get("/api/orders/:orderId/history", (req, res) => {
-  const order = findOrder(req.params.orderId);
-  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "订单不存在" });
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const order = findOrder(req.params.orderId, userId);
+  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "Order not found" });
   return res.json(ok(database.listOrderEvents(order.id)));
 });
 
 app.post("/api/orders", async (req, res) => {
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
   const idempotencyKey = fcgValue.string(req.headers["idempotency-key"]).trim();
   if (idempotencyKey.length > 160) return res.status(400).json({
     code: "INVALID_IDEMPOTENCY_KEY",
-    message: "Idempotency-Key 长度不能超过160个字符",
+    message: "Idempotency-Key must not exceed 160 characters",
   });
   if (idempotencyKey) {
     const replayed = database.getIdempotentOrder("CREATE_ORDER", idempotencyKey);
@@ -1189,16 +1283,16 @@ app.post("/api/orders", async (req, res) => {
   const parsed = orderSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({
     code: "INVALID_PARAMS",
-    message: parsed.error.issues[0]?.message || "订单参数不完整",
+    message: parsed.error.issues[0]?.message || "Order parameters are incomplete",
   });
   const customer = database.findCustomer(parsed.data.customerId);
   if (!customer) return res.status(404).json({
     code: "CUSTOMER_NOT_FOUND",
-    message: "预订客户不存在",
+    message: "Booking customer not found",
   });
   if (customer.status !== "ACTIVE") return res.status(409).json({
     code: "CUSTOMER_SUSPENDED",
-    message: "该客户已停用，不能创建新订单",
+    message: "This customer is suspended and cannot create new orders",
   });
 
   const hotelGuests = parsed.data.productType === "hotel"
@@ -1209,7 +1303,7 @@ app.post("/api/orders", async (req, res) => {
         : []
     : [];
   if (parsed.data.productType === "hotel" && !hotelGuests.length) {
-    return res.status(400).json({ code: "INVALID_PARAMS", message: "请至少填写一间房的入住人" });
+    return res.status(400).json({ code: "INVALID_PARAMS", message: "Please provide at least one guest per room" });
   }
   const validateHotelGuests = (roomNum: number) => {
     const roomIndexes = hotelGuests.map(guest => guest.roomIndex);
@@ -1224,28 +1318,29 @@ app.post("/api/orders", async (req, res) => {
       const roomNum = hotel.roomNum || 1;
       if (!validateHotelGuests(roomNum)) return res.status(400).json({
         code: "HOTEL_GUEST_ROOM_MISMATCH",
-        message: `当前预订包含 ${roomNum} 间房，请为每间房填写一位主要入住人`,
+        message: `This booking includes ${roomNum} room(s). Please provide a primary guest for each room.`,
       });
       const availability = database.getHotelAvailability(hotel.id);
       if (!availability) return res.status(409).json({
         code: "AVAILABILITY_CHECK_REQUIRED",
-        message: "请先执行模拟验房，验房结果有效期为15分钟",
+        message: "Please run the simulated availability check first. The result is valid for 15 minutes.",
       });
       const order: DistributionOrder = {
         id: localOrderId(),
         productType: "hotel",
         title: hotel.name,
-        subtitle: `${hotel.checkInDate || ""} 至 ${hotel.checkOutDate || ""} · ${roomNum}间 · ${hotel.nights || 2}晚`,
+        subtitle: `${hotel.checkInDate || ""} to ${hotel.checkOutDate || ""} · ${roomNum} room(s) · ${hotel.nights || 2} night(s)`,
         customer: customer.name,
         amount: availability.amount,
         currency: availability.currency,
         status: "PENDING_PAYMENT",
-        createdAt: "刚刚",
+        createdAt: "just now",
       };
       const persisted = database.insertOrder({
         order,
         supplier: "GLINK",
         bridgeKey: hotel.id,
+        userId,
         upstream: {
           productType: "hotel",
           simulated: true,
@@ -1268,11 +1363,11 @@ app.post("/api/orders", async (req, res) => {
   if (runtime.mode === "mock") {
     if (parsed.data.productType === "hotel") {
       const hotel = database.findHotel(parsed.data.offerId);
-      if (!hotel) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "酒店报价已失效，请重新搜索" });
+      if (!hotel) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "Hotel quote has expired. Please search again." });
       const availability = database.getHotelAvailability(hotel.id);
       if (!availability) return res.status(409).json({
         code: "AVAILABILITY_CHECK_REQUIRED",
-        message: "请先执行酒店验房，验房结果有效期为15分钟",
+        message: "Please run the hotel availability check first. The result is valid for 15 minutes.",
       });
       const stayContext = hotelStayContexts.get(hotel.id) || {
         checkInDate: "2026-08-12",
@@ -1283,23 +1378,24 @@ app.post("/api/orders", async (req, res) => {
       };
       if (!validateHotelGuests(stayContext.roomNum)) return res.status(400).json({
         code: "HOTEL_GUEST_ROOM_MISMATCH",
-        message: `当前预订包含 ${stayContext.roomNum} 间房，请为每间房填写一位主要入住人`,
+        message: `This booking includes ${stayContext.roomNum} room(s). Please provide a primary guest for each room.`,
       });
       const order: DistributionOrder = {
         id: localOrderId(),
         productType: "hotel",
         title: hotel.name,
-        subtitle: `${stayContext.checkInDate} 至 ${stayContext.checkOutDate} · ${stayContext.roomNum}间 · ${stayContext.nights}晚`,
+        subtitle: `${stayContext.checkInDate} to ${stayContext.checkOutDate} · ${stayContext.roomNum} room(s) · ${stayContext.nights} night(s)`,
         customer: customer.name,
         amount: availability.amount,
         currency: availability.currency,
         status: "PENDING_PAYMENT",
-        createdAt: "刚刚",
+        createdAt: "just now",
       };
       const persisted = database.insertOrder({
         order,
         supplier: "GLINK",
         bridgeKey: hotel.id,
+        userId,
         upstream: {
           productType: "hotel",
           amount: order.amount,
@@ -1318,31 +1414,32 @@ app.post("/api/orders", async (req, res) => {
     }
 
     const flight = database.findFlight(parsed.data.offerId);
-    if (!flight) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "机票报价已失效，请重新搜索" });
+    if (!flight) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "Flight quote has expired. Please search again." });
     const verification = database.getFlightVerification(flight.id, flight.priceKey);
     if (!verification) return res.status(409).json({
       code: "VERIFY_REQUIRED",
-      message: "请先执行 F-Link 实时验价，priceKey 有效期为15分钟",
+      message: "Please run the F-Link real-time price verification first. The priceKey is valid for 15 minutes.",
     });
     if (parsed.data.passengers.length !== verification.quantity) return res.status(400).json({
       code: "PASSENGER_COUNT_MISMATCH",
-      message: "乘机人数与验价人数不一致",
+      message: "Passenger count does not match the verified count",
     });
     const order: DistributionOrder = {
       id: localOrderId(),
       productType: "flight",
       title: `${flight.departureAirport.split(" ")[0]} → ${flight.arrivalAirport.split(" ")[0]}`,
-      subtitle: `${flight.flightNo} · 8月12日`,
+      subtitle: `${flight.flightNo} · Aug 12`,
       customer: customer.name,
       amount: verification.amount + addOnAmount(parsed.data.addOns),
       currency: verification.currency,
       status: "PENDING_PAYMENT",
-      createdAt: "刚刚",
+      createdAt: "just now",
     };
     const persisted = database.insertOrder({
       order,
       supplier: "FLINK",
       bridgeKey: flight.priceKey,
+      userId,
       upstream: {
         productType: "flight",
         supplierAmount: verification.amount,
@@ -1363,16 +1460,16 @@ app.post("/api/orders", async (req, res) => {
 
   if (parsed.data.productType === "hotel") {
     let quote = hotelQuotes.get(parsed.data.offerId);
-    if (!quote) return res.status(410).json({ code: "QUOTE_EXPIRED", message: "酒店报价已过期，请重新验房" });
+    if (!quote) return res.status(410).json({ code: "QUOTE_EXPIRED", message: "Hotel quote has expired. Please re-run the availability check." });
     if (!validateHotelGuests(quote.roomNum)) return res.status(400).json({
       code: "HOTEL_GUEST_ROOM_MISMATCH",
-      message: `当前预订包含 ${quote.roomNum} 间房，请为每间房填写一位主要入住人`,
+      message: `This booking includes ${quote.roomNum} room(s). Please provide a primary guest for each room.`,
     });
     const firstAvailability = database.getHotelAvailability(parsed.data.offerId);
     if (!firstAvailability || firstAvailability.quantity !== quote.roomNum) {
       return res.status(409).json({
         code: "AVAILABILITY_CHECK_REQUIRED",
-        message: "创建订单前必须先完成一次 G-Link 实时验房，且预订间数必须一致",
+        message: "A G-Link real-time availability check must be completed before creating an order, and the number of rooms must match.",
       });
     }
     // Mandatory second availability check immediately before creating the supplier order.
@@ -1381,7 +1478,7 @@ app.post("/api/orders", async (req, res) => {
     hotelQuotes.set(parsed.data.offerId, quote);
     const currentSupplierAmount = fcgValue.number(availability.totalSalePrice);
     if (currentSupplierAmount <= 0) throw new FcgError(
-      "G-Link 二次验房未返回有效总价",
+      "G-Link second availability check did not return a valid total price",
       "GLINK_INVALID_AVAILABILITY_PRICE",
       422,
     );
@@ -1400,7 +1497,7 @@ app.post("/api/orders", async (req, res) => {
       });
       return res.status(409).json({
         code: "HOTEL_PRICE_CHANGED",
-        message: `酒店价格已由 ${firstAvailability.currency} ${firstAvailability.amount.toFixed(2)} 变为 ${quote.currency} ${currentSaleAmount.toFixed(2)}，请确认新价格后重新提交`,
+        message: `Hotel price changed from ${firstAvailability.currency} ${firstAvailability.amount.toFixed(2)} to ${quote.currency} ${currentSaleAmount.toFixed(2)}. Please confirm the new price and resubmit.`,
       });
     }
     const currentAmount = database.calculateSaleAmount("hotel", currentSupplierAmount);
@@ -1420,12 +1517,12 @@ app.post("/api/orders", async (req, res) => {
       id: localOrderId(),
       productType: "hotel",
       title: quote.hotelName,
-      subtitle: `${quote.checkInDate} 至 ${quote.checkOutDate} · ${quote.roomNum}间`,
+      subtitle: `${quote.checkInDate} to ${quote.checkOutDate} · ${quote.roomNum} room(s)`,
       customer: customer.name,
       amount: currentAmount,
       currency: quote.currency,
       status: "PENDING_PAYMENT",
-      createdAt: "刚刚",
+      createdAt: "just now",
     };
     const upstream: UpstreamOrderContext = {
       productType: "hotel",
@@ -1438,6 +1535,7 @@ app.post("/api/orders", async (req, res) => {
       order,
       supplier: "GLINK",
       bridgeKey: partnerOrderCode,
+      userId,
       upstream,
       productSnapshot: quote,
       contactSnapshot: {
@@ -1460,13 +1558,13 @@ app.post("/api/orders", async (req, res) => {
         latestArriveTime: parsed.data.latestArriveTime,
       }, partnerOrderCode);
       if (fcgValue.number(created.result) !== 1) throw new FcgError(
-        fcgValue.string(created.message, "G-Link 创建订单失败"),
+        fcgValue.string(created.message, "G-Link failed to create the order"),
         "GLINK_CREATE_FAILED",
         422,
       );
       const supplierOrderNo = fcgValue.string(created.fcOrderCode);
       if (!supplierOrderNo) throw new FcgError(
-        "G-Link 创建成功但未返回 fcOrderCode",
+        "G-Link order created but no fcOrderCode was returned",
         "GLINK_ORDER_NUMBER_MISSING",
         502,
       );
@@ -1499,8 +1597,8 @@ app.post("/api/orders", async (req, res) => {
   }
 
   const quote = flightQuotes.get(parsed.data.offerId);
-  if (!quote) return res.status(410).json({ code: "PRICE_KEY_EXPIRED", message: "机票运价已失效，请重新搜索并验价" });
-  if (!quote.verifiedAt || Date.now() - quote.verifiedAt > 15 * 60_000) return res.status(409).json({ code: "VERIFY_REQUIRED", message: "请重新执行 F-Link 实时验价" });
+  if (!quote) return res.status(410).json({ code: "PRICE_KEY_EXPIRED", message: "Flight fare has expired. Please search and verify again." });
+  if (!quote.verifiedAt || Date.now() - quote.verifiedAt > 15 * 60_000) return res.status(409).json({ code: "VERIFY_REQUIRED", message: "Please re-run the F-Link real-time price verification" });
   const expectedPassengerCounts = {
     adult: quote.adultNum,
     child: quote.childNum || 0,
@@ -1513,7 +1611,7 @@ app.post("/api/orders", async (req, res) => {
   if (actualPassengerCounts.adult !== expectedPassengerCounts.adult
     || actualPassengerCounts.child !== expectedPassengerCounts.child
     || actualPassengerCounts.infant !== expectedPassengerCounts.infant) {
-    return res.status(400).json({ code: "PASSENGER_COUNT_MISMATCH", message: "成人、儿童或婴儿人数与验价人数不一致" });
+    return res.status(400).json({ code: "PASSENGER_COUNT_MISMATCH", message: "Adult, child, or infant count does not match the verified count" });
   }
   const order: DistributionOrder = {
     id: localOrderId(),
@@ -1525,7 +1623,7 @@ app.post("/api/orders", async (req, res) => {
       + addOnAmount(parsed.data.addOns),
     currency: quote.currency,
     status: "PENDING_PAYMENT",
-    createdAt: "刚刚",
+    createdAt: "just now",
   };
   const initialUpstream: UpstreamOrderContext = {
     productType: "flight",
@@ -1538,6 +1636,7 @@ app.post("/api/orders", async (req, res) => {
     order,
     supplier: "FLINK",
     bridgeKey: quote.priceKey,
+    userId,
     upstream: initialUpstream,
     productSnapshot: quote,
     contactSnapshot: {
@@ -1556,7 +1655,7 @@ app.post("/api/orders", async (req, res) => {
       passengers: parsed.data.passengers,
     });
     const orderNo = fcgValue.string(created.orderNo);
-    if (!orderNo) throw new FcgError("F-Link 未返回订单号", "FLINK_CREATE_FAILED", 422);
+    if (!orderNo) throw new FcgError("F-Link did not return an order number", "FLINK_CREATE_FAILED", 422);
     const supplierAmount = fcgValue.number(created.priceTotal, quote.totalAmount);
     const currency = fcgValue.string(created.currency, quote.currency);
     const completedUpstream: UpstreamOrderContext = {
@@ -1595,19 +1694,21 @@ app.post("/api/orders", async (req, res) => {
 });
 
 app.post("/api/orders/:orderId/pay", async (req, res) => {
-  const order = findOrder(req.params.orderId);
-  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "订单不存在" });
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const order = findOrder(req.params.orderId, userId);
+  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "Order not found" });
   if (order.status !== "PENDING_PAYMENT") return res.status(409).json({
     code: "ORDER_STATUS_CONFLICT",
-    message: `当前订单状态 ${order.status} 不允许重复支付`,
+    message: `Current order status ${order.status} does not allow duplicate payment`,
   });
   const upstream = database.getUpstreamContext(order.id);
   const payment = z.object({ paymentMethod: z.enum(["credit", "card"]).default("credit") }).safeParse(req.body || {});
-  if (!payment.success) return res.status(400).json({ code: "INVALID_PAYMENT_METHOD", message: "不支持的支付方式" });
+  if (!payment.success) return res.status(400).json({ code: "INVALID_PAYMENT_METHOD", message: "Unsupported payment method" });
   if (payment.data.paymentMethod === "card") {
     return res.status(409).json({
       code: "PAYMENT_CHANNEL_UNAVAILABLE",
-      message: "银行卡与数字钱包尚未接入真实收单渠道，请改用企业授信账户",
+      message: "Bank cards and digital wallets are not connected to a real acquiring channel yet. Please use the enterprise credit account instead.",
     });
   }
   if (payment.data.paymentMethod === "credit") {
@@ -1616,13 +1717,13 @@ app.post("/api/orders/:orderId/pay", async (req, res) => {
       && process.env.ALLOW_FOREIGN_CURRENCY_CREDIT !== "true") {
       return res.status(409).json({
         code: "FOREIGN_CURRENCY_CREDIT_UNAVAILABLE",
-        message: "生产环境未配置外币授信结算，不允许直接使用 CNY 授信支付外币订单",
+        message: "Foreign currency credit settlement is not configured in production. CNY credit cannot be used directly to pay foreign currency orders.",
       });
     }
     if (order.currency === "CNY" && !database.hasAvailableCredit(order.customer, order.amount)) {
       return res.status(409).json({
         code: "INSUFFICIENT_CREDIT",
-        message: "客户可用授信额度不足",
+        message: "Insufficient available credit for the customer",
       });
     }
   }
@@ -1631,7 +1732,7 @@ app.post("/api/orders/:orderId/pay", async (req, res) => {
     if (payment.data.paymentMethod === "credit"
       && order.currency === "CNY"
       && !database.consumeCustomerCredit(order.customer, order.amount)) {
-      throw new FcgError("客户授信扣减失败，请人工核对订单", "CREDIT_CAPTURE_FAILED", 409);
+      throw new FcgError("Customer credit capture failed. Please reconcile the order manually.", "CREDIT_CAPTURE_FAILED", 409);
     }
     database.createPayment(order, "CAPTURED", paymentChannel(payment.data.paymentMethod));
     const updated = database.updateOrder(
@@ -1642,13 +1743,13 @@ app.post("/api/orders/:orderId/pay", async (req, res) => {
     );
     return res.json(ok(updated));
   }
-  if (!upstream) return res.status(409).json({ code: "UPSTREAM_ORDER_MISSING", message: "未找到上游订单上下文" });
+  if (!upstream) return res.status(409).json({ code: "UPSTREAM_ORDER_MISSING", message: "Upstream order context not found" });
   let nextStatus: OrderStatus;
   let detailPending = false;
   let detailError: { code: string; message: string } | undefined;
   if (upstream.productType === "hotel") {
     const paid = fcgValue.record(await runtime.glink.glink<unknown>("/booking/payOrder", { coOrderCode: upstream.coOrderCode, fcOrderCode: upstream.fcOrderCode }));
-    if (fcgValue.number(paid.payStatus) !== 1) throw new FcgError(fcgValue.string(paid.message, "G-Link 支付受理失败"), "GLINK_PAY_FAILED", 422);
+    if (fcgValue.number(paid.payStatus) !== 1) throw new FcgError(fcgValue.string(paid.message, "G-Link failed to accept the payment"), "GLINK_PAY_FAILED", 422);
     // Webhook is the primary confirmation channel. orderDetail is only called
     // by the explicit low-frequency compensation endpoint below.
     nextStatus = "PROCESSING";
@@ -1682,7 +1783,7 @@ app.post("/api/orders/:orderId/pay", async (req, res) => {
         paymentMethod: payment.data.paymentMethod,
       },
     );
-    throw new FcgError("供应商已受理支付，但客户授信扣减失败，请立即人工核对", "CREDIT_CAPTURE_FAILED", 500);
+    throw new FcgError("The supplier accepted the payment, but customer credit capture failed. Please reconcile manually immediately.", "CREDIT_CAPTURE_FAILED", 500);
   }
   database.createPayment(order, "CAPTURED", paymentChannel(payment.data.paymentMethod));
   const updated = database.updateOrder(
@@ -1700,8 +1801,8 @@ app.post("/api/orders/:orderId/pay", async (req, res) => {
   return res.json(ok(updated));
 });
 
-const changeStatusLabels = ["待审核", "待支付", "审核拒绝", "改签出票中", "改签完成", "已取消"];
-const refundStatusLabels = ["待审核", "待确认", "审核拒绝", "退款中", "退款完成", "已撤销"];
+const changeStatusLabels = ["Pending Review", "Pending Payment", "Review Rejected", "Change Ticketing", "Change Completed", "Cancelled"];
+const refundStatusLabels = ["Pending Review", "Pending Confirmation", "Review Rejected", "Refunding", "Refund Completed", "Revoked"];
 const contactSchema = z.object({
   name: z.string().min(1).max(50),
   surname: z.string().min(1).max(50).optional(),
@@ -1731,13 +1832,13 @@ const publicAfterSalesContext = (
   const ticketed = source.supplierStatus === 8 || (runtime.mode === "mock" && order.status === "TICKETED");
   const eligible = ticketed && !refunded && !activeChange && !activeRefund;
   const eligibilityReason = refunded
-    ? "该客票已经完成退票，不能再次申请退改"
+    ? "This ticket has already been refunded. No further refund or change requests are allowed."
     : !ticketed
-    ? "航司尚未出票，出票完成后才可申请退票或改签"
+    ? "The airline has not issued the ticket yet. Refund or change requests can only be made after ticketing is complete."
     : activeChange
-      ? "当前已有改签单在处理中"
+      ? "A change order is already being processed."
       : activeRefund
-        ? "当前已有退票单在处理中"
+        ? "A refund order is already being processed."
         : undefined;
   return {
     eligible,
@@ -1750,7 +1851,7 @@ const publicAfterSalesContext = (
         kind: "change" as const,
         orderNo: change.changeOrderNo,
         status: change.status,
-        statusLabel: changeStatusLabels[change.status] || `状态 ${change.status}`,
+        statusLabel: changeStatusLabels[change.status] || `Status ${change.status}`,
         amount: change.amount,
         currency: change.currency,
         targetDate: change.targetDate,
@@ -1763,7 +1864,7 @@ const publicAfterSalesContext = (
         kind: "refund" as const,
         orderNo: refund.refundOrderNo,
         status: refund.status,
-        statusLabel: refundStatusLabels[refund.status] || `状态 ${refund.status}`,
+        statusLabel: refundStatusLabels[refund.status] || `Status ${refund.status}`,
         amount: refund.refundMoney,
         currency: refund.currency,
         rejectReason: refund.rejectReason,
@@ -1773,14 +1874,14 @@ const publicAfterSalesContext = (
   };
 };
 
-async function loadFlightAfterSales(orderId: string) {
-  const order = findOrder(orderId);
-  if (!order) throw new FcgError("订单不存在", "ORDER_NOT_FOUND", 404);
-  if (order.productType !== "flight") throw new FcgError("只有机票订单支持退改签", "PRODUCT_TYPE_CONFLICT", 409);
+async function loadFlightAfterSales(orderId: string, userId?: string) {
+  const order = findOrder(orderId, userId);
+  if (!order) throw new FcgError("Order not found", "ORDER_NOT_FOUND", 404);
+  if (order.productType !== "flight") throw new FcgError("Only flight orders support refunds and changes", "PRODUCT_TYPE_CONFLICT", 409);
   const upstream = database.getUpstreamContext(order.id);
-  if (!upstream) throw new FcgError("未找到上游订单上下文", "UPSTREAM_ORDER_MISSING", 409);
+  if (!upstream) throw new FcgError("Upstream order context not found", "UPSTREAM_ORDER_MISSING", 409);
   if (!upstream.orderNo && runtime.mode !== "mock") {
-    throw new FcgError("未找到 F-Link 上游订单号", "UPSTREAM_ORDER_MISSING", 409);
+    throw new FcgError("F-Link upstream order number not found", "UPSTREAM_ORDER_MISSING", 409);
   }
   const source = runtime.mode === "mock"
     ? {
@@ -1804,25 +1905,29 @@ async function loadFlightAfterSales(orderId: string) {
   } else if (source.supplierStatus !== 8 && order.status === "TICKETED") {
     database.updateOrder(order.id, { status: mapFlinkOrderStatus(source.supplierStatus) }, "FLINK_TICKET_ELIGIBILITY_RECONCILED", {
       rawStatus: source.supplierStatus,
-      reason: "供应商订单详情不满足退改出票条件",
+      reason: "Supplier order details do not meet the conditions for refund/change ticketing",
     });
   }
-  return { order: findOrder(order.id)!, upstream, source };
+  return { order: findOrder(order.id, userId)!, upstream, source };
 }
 
 app.get("/api/orders/:orderId/flight-aftersales", async (req, res) => {
-  const context = await loadFlightAfterSales(req.params.orderId);
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const context = await loadFlightAfterSales(req.params.orderId, userId);
   return res.json(ok(publicAfterSalesContext(context.order, context.upstream, context.source)));
 });
 
 app.post("/api/orders/:orderId/flight-aftersales/change/search", async (req, res) => {
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
   const parsed = z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     passengerCodes: z.array(z.string().min(1)).min(1).max(9),
     segmentIds: z.array(z.string().min(1)).min(1).max(9),
   }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "请选择旅客、原航段和新日期" });
-  const context = await loadFlightAfterSales(req.params.orderId);
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Please select passengers, original segments, and a new date" });
+  const context = await loadFlightAfterSales(req.params.orderId, userId);
   const publicContext = publicAfterSalesContext(context.order, context.upstream, context.source);
   if (!publicContext.eligible) return res.status(409).json({
     code: "AFTERSALES_NOT_ELIGIBLE",
@@ -1830,7 +1935,7 @@ app.post("/api/orders/:orderId/flight-aftersales/change/search", async (req, res
   });
   if (!parsed.data.passengerCodes.every(code => context.source.passengers.some(item => item.passengerCode === code))
     || !parsed.data.segmentIds.every(id => context.source.segments.some(item => item.segmentId === id))) {
-    return res.status(400).json({ code: "INVALID_BRIDGE_IDENTIFIER", message: "旅客或航段标识不属于当前订单" });
+    return res.status(400).json({ code: "INVALID_BRIDGE_IDENTIFIER", message: "Passenger or segment identifier does not belong to this order" });
   }
   const offers = runtime.mode === "mock"
     ? [{
@@ -1865,6 +1970,8 @@ app.post("/api/orders/:orderId/flight-aftersales/change/search", async (req, res
 });
 
 app.post("/api/orders/:orderId/flight-aftersales/change/apply", async (req, res) => {
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
   const parsed = z.object({
     priceKey: z.string().min(1),
     passengerCodes: z.array(z.string().min(1)).min(1).max(9),
@@ -1875,22 +1982,22 @@ app.post("/api/orders/:orderId/flight-aftersales/change/apply", async (req, res)
     evidenceFiles: z.array(z.string().url()).max(5).default([]),
     contact: contactSchema,
   }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "改签申请资料不完整" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Change application details are incomplete" });
   if (parsed.data.reasonType === 2 && !parsed.data.evidenceFiles.length) {
-    return res.status(400).json({ code: "EVIDENCE_REQUIRED", message: "非自愿改签必须提供航变或证明材料链接" });
+    return res.status(400).json({ code: "EVIDENCE_REQUIRED", message: "Involuntary changes require a link to flight disruption or supporting evidence" });
   }
-  const context = await loadFlightAfterSales(req.params.orderId);
+  const context = await loadFlightAfterSales(req.params.orderId, userId);
   const existing = context.upstream.afterSales?.change;
   if (existing && [0, 1, 3].includes(existing.status) && existing.priceKey === parsed.data.priceKey) {
     return res.json(ok(publicAfterSalesContext(context.order, context.upstream, context.source)));
   }
   if (existing && [0, 1, 3].includes(existing.status)) {
-    return res.status(409).json({ code: "CHANGE_ALREADY_ACTIVE", message: "当前已有改签单在处理中" });
+    return res.status(409).json({ code: "CHANGE_ALREADY_ACTIVE", message: "A change order is already being processed" });
   }
   const quote = flightChangeQuotes.get(parsed.data.priceKey);
   if (!quote || quote.expiresAt < Date.now() || quote.orderId !== context.order.id
     || quote.passengerCode !== parsed.data.passengerCodes.join(",") || quote.segmentId !== parsed.data.segmentIds.join(",")) {
-    return res.status(410).json({ code: "CHANGE_QUOTE_EXPIRED", message: "改签报价已过期，请重新查询" });
+    return res.status(410).json({ code: "CHANGE_QUOTE_EXPIRED", message: "Change quote has expired. Please search again." });
   }
   const publicContext = publicAfterSalesContext(context.order, context.upstream, context.source);
   if (!publicContext.eligible) return res.status(409).json({ code: "AFTERSALES_NOT_ELIGIBLE", message: publicContext.eligibilityReason });
@@ -1930,7 +2037,7 @@ app.post("/api/orders/:orderId/flight-aftersales/change/apply", async (req, res)
 
 async function syncFlightChange(context: Awaited<ReturnType<typeof loadFlightAfterSales>>) {
   const current = context.upstream.afterSales?.change;
-  if (!current) throw new FcgError("当前订单没有改签申请", "CHANGE_ORDER_MISSING", 409);
+  if (!current) throw new FcgError("This order has no change request", "CHANGE_ORDER_MISSING", 409);
   const detail = runtime.mode === "mock"
     ? { status: current.status === 3 ? 4 : current.status, priceTotal: current.amount, currency: current.currency }
     : await getFlinkChangeDetail(runtime.flink, current.changeOrderNo);
@@ -1948,21 +2055,25 @@ async function syncFlightChange(context: Awaited<ReturnType<typeof loadFlightAft
 }
 
 app.post("/api/orders/:orderId/flight-aftersales/change/refresh", async (req, res) => {
-  const context = await loadFlightAfterSales(req.params.orderId);
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const context = await loadFlightAfterSales(req.params.orderId, userId);
   return res.json(ok(await syncFlightChange(context)));
 });
 
 app.post("/api/orders/:orderId/flight-aftersales/change/pay", async (req, res) => {
-  const context = await loadFlightAfterSales(req.params.orderId);
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const context = await loadFlightAfterSales(req.params.orderId, userId);
   const current = context.upstream.afterSales?.change;
-  if (!current) return res.status(409).json({ code: "CHANGE_ORDER_MISSING", message: "当前订单没有改签申请" });
-  if (current.status !== 1) return res.status(409).json({ code: "CHANGE_STATUS_CONFLICT", message: "只有审核通过、待支付的改签单可以支付" });
+  if (!current) return res.status(409).json({ code: "CHANGE_ORDER_MISSING", message: "This order has no change request" });
+  if (current.status !== 1) return res.status(409).json({ code: "CHANGE_STATUS_CONFLICT", message: "Only approved change orders pending payment can be paid" });
   const detail = runtime.mode === "mock" ? { priceTotal: current.amount, currency: current.currency } : await getFlinkChangeDetail(runtime.flink, current.changeOrderNo);
   const amount = fcgValue.number(detail.priceTotal, current.amount);
-  if (amount < 0) throw new FcgError("改签差价金额无效", "INVALID_CHANGE_AMOUNT", 422);
+  if (amount < 0) throw new FcgError("Invalid change fare difference amount", "INVALID_CHANGE_AMOUNT", 422);
   const reserveCredit = context.order.currency === "CNY" && amount > 0;
   if (reserveCredit && !database.consumeCustomerCredit(context.order.customer, amount)) {
-    throw new FcgError("客户可用授信不足，无法支付改签差价", "INSUFFICIENT_CREDIT", 409);
+    throw new FcgError("Insufficient available credit to pay the change fare difference", "INSUFFICIENT_CREDIT", 409);
   }
   try {
     if (runtime.mode !== "mock") await payFlinkChange(runtime.flink, { changeOrderNo: current.changeOrderNo, amount: Math.round(amount) });
@@ -1991,10 +2102,12 @@ app.post("/api/orders/:orderId/flight-aftersales/change/pay", async (req, res) =
 });
 
 app.post("/api/orders/:orderId/flight-aftersales/change/cancel", async (req, res) => {
-  const context = await loadFlightAfterSales(req.params.orderId);
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const context = await loadFlightAfterSales(req.params.orderId, userId);
   const current = context.upstream.afterSales?.change;
-  if (!current) return res.status(409).json({ code: "CHANGE_ORDER_MISSING", message: "当前订单没有改签申请" });
-  if (![0, 1].includes(current.status)) return res.status(409).json({ code: "CHANGE_STATUS_CONFLICT", message: "当前改签状态不允许取消" });
+  if (!current) return res.status(409).json({ code: "CHANGE_ORDER_MISSING", message: "This order has no change request" });
+  if (![0, 1].includes(current.status)) return res.status(409).json({ code: "CHANGE_STATUS_CONFLICT", message: "The current change status does not allow cancellation" });
   if (runtime.mode !== "mock") await cancelFlinkChange(runtime.flink, current.changeOrderNo);
   current.status = 5;
   current.updatedAt = new Date().toISOString();
@@ -2006,6 +2119,8 @@ app.post("/api/orders/:orderId/flight-aftersales/change/cancel", async (req, res
 });
 
 app.post("/api/orders/:orderId/flight-aftersales/refund/apply", async (req, res) => {
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
   const parsed = z.object({
     passengerCodes: z.array(z.string().min(1)).min(1).max(9),
     segmentIds: z.array(z.string().min(1)).min(1).max(9),
@@ -2014,11 +2129,11 @@ app.post("/api/orders/:orderId/flight-aftersales/refund/apply", async (req, res)
     evidenceFiles: z.array(z.string().url()).max(5).default([]),
     contact: contactSchema,
   }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "退票申请资料不完整" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Refund application details are incomplete" });
   if (parsed.data.refundType === 2 && !parsed.data.evidenceFiles.length) {
-    return res.status(400).json({ code: "EVIDENCE_REQUIRED", message: "非自愿退票必须提供航变或证明材料链接" });
+    return res.status(400).json({ code: "EVIDENCE_REQUIRED", message: "Involuntary refunds require a link to flight disruption or supporting evidence" });
   }
-  const context = await loadFlightAfterSales(req.params.orderId);
+  const context = await loadFlightAfterSales(req.params.orderId, userId);
   const existing = context.upstream.afterSales?.refund;
   if (existing && [0, 1, 3].includes(existing.status)) {
     return res.json(ok(publicAfterSalesContext(context.order, context.upstream, context.source)));
@@ -2027,7 +2142,7 @@ app.post("/api/orders/:orderId/flight-aftersales/refund/apply", async (req, res)
   if (!publicContext.eligible) return res.status(409).json({ code: "AFTERSALES_NOT_ELIGIBLE", message: publicContext.eligibilityReason });
   if (!parsed.data.passengerCodes.every(code => context.source.passengers.some(item => item.passengerCode === code))
     || !parsed.data.segmentIds.every(id => context.source.segments.some(item => item.segmentId === id))) {
-    return res.status(400).json({ code: "INVALID_BRIDGE_IDENTIFIER", message: "旅客或航段标识不属于当前订单" });
+    return res.status(400).json({ code: "INVALID_BRIDGE_IDENTIFIER", message: "Passenger or segment identifier does not belong to this order" });
   }
   const applied = runtime.mode === "mock"
     ? { refundOrderNo: `MOCK-RF-${Date.now()}`, status: 1 }
@@ -2060,7 +2175,7 @@ app.post("/api/orders/:orderId/flight-aftersales/refund/apply", async (req, res)
 
 async function syncFlightRefund(context: Awaited<ReturnType<typeof loadFlightAfterSales>>) {
   const current = context.upstream.afterSales?.refund;
-  if (!current) throw new FcgError("当前订单没有退票申请", "REFUND_ORDER_MISSING", 409);
+  if (!current) throw new FcgError("This order has no refund request", "REFUND_ORDER_MISSING", 409);
   const detail = runtime.mode === "mock"
     ? { status: current.status === 3 ? 4 : current.status, refundMoney: context.order.amount, refundFee: 0, currency: current.currency }
     : await getFlinkRefundDetail(runtime.flink, current.refundOrderNo);
@@ -2096,20 +2211,24 @@ async function syncFlightRefund(context: Awaited<ReturnType<typeof loadFlightAft
 }
 
 app.post("/api/orders/:orderId/flight-aftersales/refund/refresh", async (req, res) => {
-  const context = await loadFlightAfterSales(req.params.orderId);
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const context = await loadFlightAfterSales(req.params.orderId, userId);
   return res.json(ok(await syncFlightRefund(context)));
 });
 
 app.post("/api/orders/:orderId/flight-aftersales/refund/confirm", async (req, res) => {
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
   const parsed = z.object({ confirm: z.enum(["1", "2"]) }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "确认参数不正确" });
-  const context = await loadFlightAfterSales(req.params.orderId);
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Confirmation parameters are invalid" });
+  const context = await loadFlightAfterSales(req.params.orderId, userId);
   const current = context.upstream.afterSales?.refund;
-  if (!current) return res.status(409).json({ code: "REFUND_ORDER_MISSING", message: "当前订单没有退票申请" });
-  if (current.status !== 1) return res.status(409).json({ code: "REFUND_STATUS_CONFLICT", message: "只有待确认退票单可以确认或撤销" });
+  if (!current) return res.status(409).json({ code: "REFUND_ORDER_MISSING", message: "This order has no refund request" });
+  if (current.status !== 1) return res.status(409).json({ code: "REFUND_STATUS_CONFLICT", message: "Only refund orders pending confirmation can be confirmed or revoked" });
   if (parsed.data.confirm === "1" && current.refundMoney === undefined) return res.status(409).json({
     code: "REFUND_AMOUNT_MISSING",
-    message: "供应商尚未返回退款金额，请刷新退票单后再确认",
+    message: "The supplier has not returned the refund amount yet. Please refresh the refund order before confirming.",
   });
   if (runtime.mode !== "mock") await confirmFlinkRefund(runtime.flink, { refundOrderNo: current.refundOrderNo, confirm: parsed.data.confirm });
   current.status = parsed.data.confirm === "1" ? 3 : 5;
@@ -2137,7 +2256,7 @@ async function refreshOrderFromSupplier(order: DistributionOrder) {
     return order;
   }
   if (order.status === "PENDING_PAYMENT") {
-    throw new FcgError("未支付订单不会调用供应商订单详情补偿查询", "ORDER_NOT_PAID", 409);
+    throw new FcgError("Unpaid orders do not trigger supplier order detail compensation queries", "ORDER_NOT_PAID", 409);
   }
   const upstream = database.getUpstreamContext(order.id);
   if (runtime.mode === "mock" || upstream?.simulated) {
@@ -2152,7 +2271,7 @@ async function refreshOrderFromSupplier(order: DistributionOrder) {
     }
     return order;
   }
-  if (!upstream) throw new FcgError("未找到上游订单上下文", "UPSTREAM_ORDER_MISSING", 409);
+  if (!upstream) throw new FcgError("Upstream order context not found", "UPSTREAM_ORDER_MISSING", 409);
   let nextStatus: OrderStatus;
   let rawStatus: number | undefined;
   if (upstream.productType === "hotel") {
@@ -2174,15 +2293,17 @@ async function refreshOrderFromSupplier(order: DistributionOrder) {
 }
 
 app.post("/api/orders/:orderId/refresh", async (req, res) => {
-  const order = findOrder(req.params.orderId);
-  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "订单不存在" });
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const order = findOrder(req.params.orderId, userId);
+  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "Order not found" });
   return res.json(ok(await refreshOrderFromSupplier(order)));
 });
 
 async function cancelOrderWithSupplier(order: DistributionOrder, reason: string) {
   if (["CANCELLED", "TICKETED", "CHANGING", "REFUNDING", "REFUNDED"].includes(order.status)) {
     throw new FcgError(
-      `当前订单状态 ${order.status} 不允许取消`,
+      `Current order status ${order.status} does not allow cancellation`,
       "ORDER_STATUS_CONFLICT",
       409,
     );
@@ -2190,7 +2311,7 @@ async function cancelOrderWithSupplier(order: DistributionOrder, reason: string)
   const upstream = database.getUpstreamContext(order.id);
   let cancellationPending = false;
   if (runtime.mode !== "mock" && !upstream?.simulated) {
-    if (!upstream) throw new FcgError("未找到上游订单上下文", "UPSTREAM_ORDER_MISSING", 409);
+    if (!upstream) throw new FcgError("Upstream order context not found", "UPSTREAM_ORDER_MISSING", 409);
     if (upstream.productType === "hotel") {
       const cancelled = fcgValue.record(await runtime.glink.glink<unknown>("/order/cancelOrder", {
         coOrderCode: upstream.coOrderCode,
@@ -2200,7 +2321,7 @@ async function cancelOrderWithSupplier(order: DistributionOrder, reason: string)
       const cancelStatus = mapGlinkCancelResult(cancelled.cancelResult);
       if (cancelStatus === "REFUSED") {
         throw new FcgError(
-          fcgValue.string(cancelled.message, "G-Link 拒绝取消订单"),
+          fcgValue.string(cancelled.message, "G-Link refused to cancel the order"),
           "GLINK_CANCEL_REFUSED",
           409,
         );
@@ -2243,11 +2364,13 @@ async function cancelOrderWithSupplier(order: DistributionOrder, reason: string)
 }
 
 app.post("/api/orders/:orderId/cancel", async (req, res) => {
-  const order = findOrder(req.params.orderId);
-  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "订单不存在" });
+  const userId = authUserId(req);
+  if (!userId) return res.status(401).json({ code: "AUTH_REQUIRED", message: "Authentication required" });
+  const order = findOrder(req.params.orderId, userId);
+  if (!order) return res.status(404).json({ code: "ORDER_NOT_FOUND", message: "Order not found" });
   const result = await cancelOrderWithSupplier(
     order,
-    fcgValue.string(req.body?.reason, "客户主动取消"),
+    fcgValue.string(req.body?.reason, "Customer initiated cancellation"),
   );
   return res.status(result.pending ? 202 : 200).json(ok(result.order));
 });
@@ -2271,7 +2394,7 @@ export async function runOrderMaintenance() {
 
   for (const order of unpaid) {
     try {
-      const result = await cancelOrderWithSupplier(order, `超过${unpaidTimeoutMinutes}分钟未支付，系统自动取消`);
+      const result = await cancelOrderWithSupplier(order, `Unpaid for over ${unpaidTimeoutMinutes} minutes. System auto-cancelled.`);
       detail.push({
         orderId: order.id,
         action: "AUTO_CANCEL",
@@ -2370,10 +2493,10 @@ app.post("/api/admin/maintenance/orders/run", async (req, res) => {
     const expected = process.env.MAINTENANCE_API_KEY || "";
     const provided = fcgValue.string(req.headers["x-maintenance-key"]);
     if (!expected || provided !== expected) {
-      return res.status(401).json({ code: "UNAUTHORIZED", message: "维护任务密钥不正确" });
+      return res.status(401).json({ code: "UNAUTHORIZED", message: "Maintenance API key is incorrect" });
     }
   } else if (!isAuthenticated(req)) {
-    return res.status(401).json({ code: "AUTH_REQUIRED", message: "请先登录后再运行维护任务" });
+    return res.status(401).json({ code: "AUTH_REQUIRED", message: "Please sign in before running maintenance tasks" });
   }
   return res.json(ok(await runOrderMaintenance()));
 });
@@ -2390,18 +2513,18 @@ app.post("/api/webhooks/glink/order-status", (req, res) => {
     api_code: z.string().optional(),
     occurred_at: z.string().optional(),
   }).passthrough().safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_CALLBACK", message: "回调报文不符合 OpenAPI 契约" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_CALLBACK", message: "Callback payload does not conform to the OpenAPI contract" });
   const eventKey = parsed.data.idempotency_key || parsed.data.event_id;
   if (runtime.mode !== "mock") {
     if (parsed.data.env_type !== runtime.environment) return res.status(409).json({
       code: "WEBHOOK_ENVIRONMENT_MISMATCH",
-      message: `回调环境 ${parsed.data.env_type || "missing"} 与当前服务环境 ${runtime.environment} 不一致`,
+      message: `Callback environment ${parsed.data.env_type || "missing"} does not match the current service environment ${runtime.environment}`,
     });
     if (fcgValue.string(req.headers["x-op-webhook-event-id"]) !== parsed.data.event_id
       || fcgValue.string(req.headers["x-op-webhook-type"]) !== parsed.data.event_type) {
       return res.status(400).json({
         code: "WEBHOOK_HEADER_MISMATCH",
-        message: "Webhook 事件头与请求体不一致",
+        message: "Webhook event headers do not match the request body",
       });
     }
     const rawBody = (req as express.Request & { rawBody?: string }).rawBody || "";
@@ -2412,13 +2535,13 @@ app.post("/api/webhooks/glink/order-status", (req, res) => {
       headers: req.headers,
       credentials: runtime.glinkCredentials,
     });
-    if (!verification.valid) return res.status(401).json({ code: verification.code, message: "Webhook 签名验证失败" });
+    if (!verification.valid) return res.status(401).json({ code: verification.code, message: "Webhook signature verification failed" });
     const nonce = fcgValue.string(req.headers["x-op-nonce"]);
     if (!database.registerWebhookNonce("GLINK", nonce)) {
       if (database.hasWebhookEvent("GLINK", eventKey)) {
         return res.json(ok({ accepted: true, duplicate: true }));
       }
-      return res.status(409).json({ code: "WEBHOOK_NONCE_REPLAY", message: "Webhook nonce 已使用" });
+      return res.status(409).json({ code: "WEBHOOK_NONCE_REPLAY", message: "Webhook nonce has already been used" });
     }
   }
   const webhook = database.recordWebhook("GLINK", eventKey, true, parsed.data);
@@ -2453,7 +2576,7 @@ app.post("/api/webhooks/glink/order-status", (req, res) => {
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if ((error as { type?: string })?.type === "entity.too.large") {
-    return res.status(413).json({ code: "AVATAR_TOO_LARGE", message: "头像不能超过 2 MB" });
+    return res.status(413).json({ code: "AVATAR_TOO_LARGE", message: "Avatar must not exceed 2 MB" });
   }
   if (error instanceof FcgError) {
     return res.status(error.status >= 400 && error.status < 600 ? error.status : 502).json({
@@ -2463,7 +2586,7 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
       traceId: error.traceId,
     });
   }
-  const message = error instanceof Error ? error.message : "服务暂时不可用";
+  const message = error instanceof Error ? error.message : "Service temporarily unavailable";
   return res.status(500).json({ code: "INTERNAL_ERROR", message });
 });
 
@@ -2479,7 +2602,7 @@ if (existsSync(frontendDist)) {
     return res.sendFile(join(frontendDist, "index.html"));
   });
 }
-app.use((_req, res) => res.status(404).json({ code: "NOT_FOUND", message: "接口不存在" }));
+app.use((_req, res) => res.status(404).json({ code: "NOT_FOUND", message: "Endpoint not found" }));
 
 const port = Number(process.env.PORT || 8787);
 const directRun = process.argv[1]

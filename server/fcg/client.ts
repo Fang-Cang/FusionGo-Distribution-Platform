@@ -35,7 +35,7 @@ export class FcgClient {
 
   async request<T>(method: "GET" | "POST", path: string, body?: unknown, query?: Record<string, string | number | undefined>) {
     if (!this.credentials.appKey || !this.credentials.appSecret) {
-      throw new FcgError("FCG 沙箱凭证尚未配置", "FCG_NOT_CONFIGURED", 503);
+      throw new FcgError("FCG sandbox credentials not configured", "FCG_NOT_CONFIGURED", 503);
     }
     const rawBody = body === undefined ? "" : JSON.stringify(body);
     const signed = createFcgSignature({ method, path, body: rawBody, query, ...this.credentials });
@@ -55,7 +55,7 @@ export class FcgClient {
     try {
       envelope = JSON.parse(responseText) as FcgEnvelope<T>;
     } catch {
-      throw new FcgError(`FCG 返回了非 JSON 响应（HTTP ${response.status}）`, "INVALID_FCG_RESPONSE", response.status);
+      throw new FcgError(`FCG returned non-JSON response (HTTP ${response.status})`, "INVALID_FCG_RESPONSE", response.status);
     }
     this.auditEntries.push({
       method,

@@ -34,6 +34,7 @@ const migration008 = readFileSync(migrationUrl("008_remove_historical_simulated_
 const migration009 = readFileSync(migrationUrl("009_split_person_names.sql"), "utf8");
 const migration010 = readFileSync(migrationUrl("010_hotel_favorites.sql"), "utf8");
 const migration011 = readFileSync(migrationUrl("011_local_user_auth.sql"), "utf8");
+const migration012 = readFileSync(migrationUrl("012_order_user_isolation.sql"), "utf8");
 
 type SqlValue = string | number | bigint | null | Uint8Array;
 type SqlParams = SqlValue[];
@@ -49,6 +50,7 @@ type OrderRow = {
   currency: string;
   status: OrderStatus;
   created_at: string;
+  user_id: string | null;
 };
 
 type HotelRow = {
@@ -133,6 +135,7 @@ export interface UpstreamOrderContext {
 export interface PersistOrderInput {
   order: DistributionOrder;
   supplier: "GLINK" | "FLINK";
+  userId: string;
   bridgeKey?: string;
   upstream?: UpstreamOrderContext;
   productSnapshot?: unknown;
@@ -259,7 +262,7 @@ const parseJson = <T>(value: string, fallback: T): T => {
 const displayTime = (iso: string) => {
   const date = new Date(iso);
   if (!Number.isFinite(date.getTime())) return iso;
-  if (Date.now() - date.getTime() < 60_000) return "刚刚";
+  if (Date.now() - date.getTime() < 60_000) return "Just now";
   return new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit",
     day: "2-digit",
@@ -366,6 +369,7 @@ export class FusionDatabase {
       { version: 9, name: "009_split_person_names", sql: migration009 },
       { version: 10, name: "010_hotel_favorites", sql: migration010 },
       { version: 11, name: "011_local_user_auth", sql: migration011 },
+      { version: 12, name: "012_order_user_isolation", sql: migration012 },
     ];
     migrations.forEach(migration => {
       const current = this.db.prepare(
@@ -379,6 +383,21 @@ export class FusionDatabase {
         ).run(migration.version, migration.name, nowIso());
       });
     });
+
+    this.backfillOrderUserIds();
+  }
+
+  private backfillOrderUserIds() {
+    const columnCheck = this.db.prepare("PRAGMA table_info(orders)").all() as Array<{ name: string }>;
+    const hasUserId = columnCheck.some(col => col.name === "user_id");
+    if (!hasUserId) return;
+
+    const unassignedCount = this.db.prepare(
+      "SELECT COUNT(*) as count FROM orders WHERE user_id IS NULL",
+    ).get() as { count: number };
+    if (unassignedCount.count === 0) return;
+
+    this.db.prepare("UPDATE orders SET user_id = 'user-demo' WHERE user_id IS NULL").run();
   }
 
   seed(includeDemoSupplierData = process.env.NODE_ENV === "test") {
@@ -387,13 +406,13 @@ export class FusionDatabase {
       this.db.prepare(`
         INSERT OR IGNORE INTO tenants(id, name, status, default_currency, created_at)
         VALUES (?, ?, 'ACTIVE', 'CNY', ?)
-      `).run(DEFAULT_TENANT_ID, "寰宇旅行", createdAt);
+      `).run(DEFAULT_TENANT_ID, "Universal Travel", createdAt);
 
       this.db.prepare(`
         INSERT OR IGNORE INTO user_profiles(
           id, tenant_id, name, language, phone, email,
           avatar_blob, avatar_mime, avatar_updated_at, created_at, updated_at
-        ) VALUES ('user-demo', ?, '林嘉诚', 'en', '13800008866',
+        ) VALUES ('user-demo', ?, 'Lin Jiacheng', 'en', '13800008866',
           'lin@example.com', NULL, NULL, NULL, ?, ?)
       `).run(DEFAULT_TENANT_ID, createdAt, createdAt);
 
@@ -472,14 +491,15 @@ export class FusionDatabase {
         const seedTime = new Date(Date.now() - index * 25 * 60_000).toISOString();
         this.db.prepare(`
           INSERT OR IGNORE INTO orders(
-            id, tenant_id, product_type, supplier, supplier_order_no, bridge_key,
+            id, tenant_id, user_id, product_type, supplier, supplier_order_no, bridge_key,
             customer, title, subtitle, status, currency, amount,
             product_snapshot_json, contact_snapshot_json, upstream_context_json,
             version, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, '{}', '{}', 0, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, '{}', '{}', 0, ?, ?)
         `).run(
           order.id,
           DEFAULT_TENANT_ID,
+          "user-demo",
           order.productType,
           order.productType === "hotel" ? "GLINK" : "FLINK",
           order.supplierOrderNo || null,
@@ -502,9 +522,9 @@ export class FusionDatabase {
         ) VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)
       `);
       [
-        ["CUS-001", "寰宇旅行", "林嘉诚", "13800008866", "lin@example.com", 200000, 48320],
-        ["CUS-002", "远行商旅", "周敏", "13900002166", "zhou@example.com", 100000, 12680],
-        ["CUS-003", "海岸假期", "陈悦", "13700003618", "chen@example.com", 80000, 8950],
+        ["CUS-001", "Universal Travel", "Lin Jiacheng", "13800008866", "lin@example.com", 200000, 48320],
+        ["CUS-002", "YuanXing Travel", "Zhou Min", "13900002166", "zhou@example.com", 100000, 12680],
+        ["CUS-003", "HaiAn Holidays", "Chen Yue", "13700003618", "chen@example.com", 80000, 8950],
       ].forEach(customer => customerStatement.run(
         customer[0],
         DEFAULT_TENANT_ID,
@@ -525,8 +545,8 @@ export class FusionDatabase {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       [
-        ["PR-001", "酒店标准加价", "hotel", "percentage", 8, 100, "INACTIVE"],
-        ["PR-002", "机票服务费", "flight", "fixed", 50, 100, "INACTIVE"],
+        ["PR-001", "Hotel Standard Markup", "hotel", "percentage", 8, 100, "INACTIVE"],
+        ["PR-002", "Flight Service Fee", "flight", "fixed", 50, 100, "INACTIVE"],
       ].forEach(rule => ruleStatement.run(
         rule[0],
         DEFAULT_TENANT_ID,
@@ -997,13 +1017,13 @@ export class FusionDatabase {
     } : undefined;
   }
 
-  listOrders(limit?: number) {
+  listOrders(userId: string, limit?: number) {
     const sql = limit
-      ? "SELECT * FROM orders ORDER BY created_at DESC LIMIT ?"
-      : "SELECT * FROM orders ORDER BY created_at DESC";
+      ? "SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT ?"
+      : "SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC";
     const rows = (limit
-      ? this.db.prepare(sql).all(limit)
-      : this.db.prepare(sql).all()) as unknown as OrderRow[];
+      ? this.db.prepare(sql).all(userId, limit)
+      : this.db.prepare(sql).all(userId)) as unknown as OrderRow[];
     return rows.map(mapOrder);
   }
 
@@ -1016,18 +1036,25 @@ export class FusionDatabase {
     return rows.map(mapOrder);
   }
 
-  findOrder(id: string) {
-    const row = this.db.prepare(
-      "SELECT * FROM orders WHERE id = ?",
-    ).get(id) as OrderRow | undefined;
+  findOrder(id: string, userId?: string) {
+    const sql = userId
+      ? "SELECT * FROM orders WHERE id = ? AND user_id = ?"
+      : "SELECT * FROM orders WHERE id = ?";
+    const row = (userId
+      ? this.db.prepare(sql).get(id, userId)
+      : this.db.prepare(sql).get(id)) as OrderRow | undefined;
     return row ? mapOrder(row) : undefined;
   }
 
-  getOrderSnapshots(orderId: string) {
-    const row = this.db.prepare(`
-      SELECT product_snapshot_json, contact_snapshot_json
-      FROM orders WHERE id = ?
-    `).get(orderId) as {
+  getOrderSnapshots(orderId: string, userId?: string) {
+    const sql = userId
+      ? `SELECT product_snapshot_json, contact_snapshot_json
+         FROM orders WHERE id = ? AND user_id = ?`
+      : `SELECT product_snapshot_json, contact_snapshot_json
+         FROM orders WHERE id = ?`;
+    const row = (userId
+      ? this.db.prepare(sql).get(orderId, userId)
+      : this.db.prepare(sql).get(orderId)) as {
       product_snapshot_json: string;
       contact_snapshot_json: string;
     } | undefined;
@@ -1058,14 +1085,15 @@ export class FusionDatabase {
     this.transaction(() => {
       this.db.prepare(`
         INSERT INTO orders(
-          id, tenant_id, product_type, supplier, supplier_order_no, bridge_key,
+          id, tenant_id, user_id, product_type, supplier, supplier_order_no, bridge_key,
           customer, title, subtitle, status, currency, amount,
           product_snapshot_json, contact_snapshot_json, upstream_context_json,
           version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       `).run(
         input.order.id,
         DEFAULT_TENANT_ID,
+        input.userId,
         input.order.productType,
         input.supplier,
         input.order.supplierOrderNo || null,
@@ -1090,7 +1118,7 @@ export class FusionDatabase {
         { supplier: input.supplier },
       );
     });
-    return this.findOrder(input.order.id)!;
+    return this.findOrder(input.order.id, input.userId)!;
   }
 
   updateOrder(

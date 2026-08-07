@@ -16,9 +16,9 @@ export async function getDisplayFxRates(fetcher: FetchLike = fetch): Promise<Dis
     headers: { Accept: "application/json", "User-Agent": "FusionGo/0.1" },
     signal: AbortSignal.timeout(8_000),
   });
-  if (!response.ok) throw new Error(`汇率服务暂时不可用（HTTP ${response.status}）`);
+  if (!response.ok) throw new Error(`Exchange rate service unavailable (HTTP ${response.status})`);
   const body = await response.json() as FxRow[];
-  if (!Array.isArray(body)) throw new Error("汇率服务返回格式无效");
+  if (!Array.isArray(body)) throw new Error("Invalid exchange rate service response format");
 
   const rates: Record<DisplayCurrency, number> = { CNY: 1, USD: 0, HKD: 0, SGD: 0 };
   let date = "";
@@ -31,7 +31,7 @@ export async function getDisplayFxRates(fetcher: FetchLike = fetch): Promise<Dis
     date ||= String(row.date || "");
   }
   if (!date || targets.some(currency => !(rates[currency] > 0))) {
-    throw new Error("汇率服务缺少所需币种");
+    throw new Error("Exchange rate service missing required currencies");
   }
   cachedRates = {
     base: "CNY",

@@ -30,15 +30,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       headers: { "Content-Type": "application/json", ...init?.headers },
     });
   } catch {
-    throw new Error("无法连接预订服务，请确认本地 API 已启动后重试");
+    throw new Error("Unable to connect to booking service. Please ensure local API is running and retry.");
   }
   let body: { code?: string; data?: T; message?: string };
   try {
     body = (await response.json()) as typeof body;
   } catch {
-    throw new Error(response.ok ? "预订服务返回了无法识别的数据" : `预订服务暂时不可用（HTTP ${response.status}）`);
+    throw new Error(response.ok ? "Booking service returned unrecognized data" : `Booking service temporarily unavailable (HTTP ${response.status})`);
   }
-  if (!response.ok || (body.code && body.code !== "SUCCESS")) throw new Error(body.message || "请求失败");
+  if (!response.ok || (body.code && body.code !== "SUCCESS")) throw new Error(body.message || "Request failed");
   return body.data as T;
 }
 
@@ -72,10 +72,10 @@ export const api = {
         body: file,
       });
     } catch {
-      throw new Error("无法连接头像存储服务，请确认本地 API 已启动后重试");
+      throw new Error("Unable to connect to avatar storage service. Please ensure local API is running and retry.");
     }
     const body = await response.json() as { code?: string; data?: AccountProfile; message?: string };
-    if (!response.ok || (body.code && body.code !== "SUCCESS")) throw new Error(body.message || "头像保存失败");
+    if (!response.ok || (body.code && body.code !== "SUCCESS")) throw new Error(body.message || "Avatar save failed");
     return body.data as AccountProfile;
   },
   listAccountTravelers: () => request<AccountTraveler[]>("/api/account/travelers"),
@@ -106,6 +106,17 @@ export const api = {
     request<NotificationPreferences>("/api/account/notifications", {
       method: "PATCH",
       body: JSON.stringify(body),
+    }),
+  getDestination: (keyword: string, signal?: AbortSignal) =>
+    request<Array<{ name: string; detail: string; destinationId: string; cityCode: string }>>("/api/hotels/destination", {
+      method: "POST",
+      body: JSON.stringify({ keyword }),
+      signal,
+    }),
+  getHotelById: (hotelId: string, hotelName: string) =>
+    request<HotelOffer>("/api/hotels/by-id", {
+      method: "POST",
+      body: JSON.stringify({ hotelId, hotelName }),
     }),
   searchHotels: (
     params: { destination: string; checkIn: string; checkOut: string; rooms?: number; adults?: number; children?: number; childAges?: number[] },
@@ -263,7 +274,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ confirm }),
     }),
-  cancelOrder: (orderId: string, reason = "客户主动取消") =>
+  cancelOrder: (orderId: string, reason = "Customer initiated cancellation") =>
     request<DistributionOrder>(`/api/orders/${orderId}/cancel`, {
       method: "POST",
       body: JSON.stringify({ reason }),

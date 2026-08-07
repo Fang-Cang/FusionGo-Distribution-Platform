@@ -34,7 +34,7 @@ The content below the header intentionally differs because the source is a consu
 
 `docs/design-qa-comparison-booking-header.png` compares only the top 145 pixels.
 
-- Typography: both use a bold brand wordmark, compact utility labels, and medium-weight navigation labels. FusionGo retains the existing DM Sans/Noto Sans SC system.
+- Typography: both use a bold brand wordmark, compact utility labels, and medium-weight navigation labels. FusionGo retains the existing Apple SF Pro Display system font (with Noto Sans SC for CJK).
 - Spacing: two 56–64 px navigation rows, consistent left alignment, and right-aligned utilities match the source hierarchy.
 - Colors/tokens: Booking blue is translated into the existing navy/indigo glass system. White text maintains AA contrast; active state uses an edge highlight plus indigo focus ring.
 - Image quality: no raster image assets are required in the header. Existing Lucide icons are crisp and consistent with the application.
