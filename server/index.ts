@@ -56,7 +56,7 @@ import { isoNationalityOptions, mergeSupplierNationalities } from "./reference/n
 
 export const app = express();
 const runtime = getFcgRuntime();
-export const database = openFusionDatabase();
+export const database = openFusionDatabase(simulatedSupplierDataAllowed());
 const hotelQuotes = new Map<string, HotelQuoteContext>();
 const hotelStayContexts = new Map<string, {
   checkInDate: string;

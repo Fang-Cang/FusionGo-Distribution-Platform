@@ -1681,8 +1681,8 @@ export function databasePath() {
   return resolve(process.cwd(), ".data", `fusiongo-${environment}.sqlite`);
 }
 
-export function openFusionDatabase() {
+export function openFusionDatabase(includeDemoSupplierData = process.env.NODE_ENV === "test") {
   const database = new FusionDatabase(databasePath());
-  database.seed();
+  database.seed(includeDemoSupplierData);
   return database;
 }
