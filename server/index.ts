@@ -738,6 +738,14 @@ app.post("/api/hotels/destination", async (req, res, next) => {
     }
   }
   const mockDestinations = [
+    { name: "London", detail: "United Kingdom · England", destinationId: "GB-LON", cityCode: "LON" },
+    { name: "London", detail: "Canada · Ontario", destinationId: "CA-YXU", cityCode: "YXU" },
+    { name: "London", detail: "United States of America · Ohio", destinationId: "US-OH-LONDON", cityCode: "US-OH-LONDON" },
+    { name: "New London", detail: "United States of America · Minnesota", destinationId: "US-MN-NEW-LONDON", cityCode: "US-MN-NEW-LONDON" },
+    { name: "New London", detail: "United States of America · North Carolina", destinationId: "US-NC-NEW-LONDON", cityCode: "US-NC-NEW-LONDON" },
+    { name: "East London", detail: "South Africa · Eastern Cape", destinationId: "ZA-ELS", cityCode: "ELS" },
+    { name: "Little London", detail: "Jamaica · Westmoreland", destinationId: "JM-LITTLE-LONDON", cityCode: "JM-LITTLE-LONDON" },
+    { name: "London Colney", detail: "England · St Albans", destinationId: "GB-LONDON-COLNEY", cityCode: "GB-LONDON-COLNEY" },
     { name: "Shanghai", detail: "China · Business & Leisure", destinationId: "SHA", cityCode: "SHA" },
     { name: "Hong Kong", detail: "Hong Kong, China · Harbor City", destinationId: "HKG", cityCode: "HKG" },
     { name: "Beijing", detail: "China · Historic Capital", destinationId: "BJS", cityCode: "BJS" },

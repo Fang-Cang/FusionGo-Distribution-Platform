@@ -31,6 +31,24 @@ afterAll(async () => {
 });
 
 describe("credential-free sandbox hotel simulation", () => {
+  it("returns the London destination choices used by the autocomplete", async () => {
+    const response = await fetch(`${baseUrl}/api/hotels/destination`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keyword: "London" }),
+    });
+    const body = await response.json() as { code: string; data: Array<{ name: string; detail: string; destinationId: string }> };
+
+    expect(response.status).toBe(200);
+    expect(body.data).toHaveLength(8);
+    expect(body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "London", detail: "United Kingdom · England" }),
+      expect.objectContaining({ name: "East London", detail: "South Africa · Eastern Cape" }),
+      expect.objectContaining({ name: "London Colney", detail: "England · St Albans" }),
+    ]));
+    expect(new Set(body.data.map(item => item.destinationId)).size).toBe(8);
+  });
+
   it("searches local test hotels instead of calling an unconfigured FCG client", async () => {
     const response = await fetch(`${baseUrl}/api/hotels/search`, {
       method: "POST",
