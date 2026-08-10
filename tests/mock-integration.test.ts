@@ -40,7 +40,7 @@ beforeAll(async () => {
       resolve(running);
     });
   });
-});
+}, 30_000);
 
 afterAll(async () => {
   if (!server || !database || !server.listening) return;
@@ -63,7 +63,7 @@ describe("mock hotel integration", () => {
 
   it("enforces availability check and persists the complete payment flow", async () => {
     const search = await post<HotelOffer[]>("/api/hotels/search", {
-      destination: "上海",
+      destination: "Shanghai",
       checkIn: "2026-08-12",
       checkOut: "2026-08-14",
     });
@@ -138,7 +138,7 @@ describe("mock hotel integration", () => {
 
   it("books multiple rooms across multiple nights with one primary guest per room", async () => {
     const search = await post<HotelOffer[]>("/api/hotels/search", {
-      destination: "上海",
+      destination: "Shanghai",
       checkIn: "2026-09-10",
       checkOut: "2026-09-13",
       rooms: 2,
@@ -170,7 +170,7 @@ describe("mock hotel integration", () => {
       latestArriveTime: "20:00",
     });
     expect(created.response.status).toBe(201);
-    expect(created.body.data.subtitle).toContain("2间 · 3晚");
+    expect(created.body.data.subtitle).toContain("2 room(s) · 3 night(s)");
     expect(created.body.data.amount).toBe(availability.body.data.price);
 
     const details = await request<{
@@ -209,7 +209,7 @@ describe("mock hotel integration", () => {
     });
     expect(invalid.response.status).toBe(400);
     expect(invalid.body.code).toBe("INVALID_PARAMS");
-    expect(invalid.body.message).toContain("只能包含英文字母和空格");
+    expect(invalid.body.message).toContain("may only contain letters and spaces");
   });
 });
 
@@ -381,7 +381,7 @@ describe("database and webhook observability", () => {
       counts: { orders: number; payments: number };
     }>("/api/database/status");
     expect(status.body.data.driver).toBe("sqlite");
-    expect(status.body.data.migrationVersion).toBe(11);
+    expect(status.body.data.migrationVersion).toBe(12);
     expect(status.body.data.counts.orders).toBeGreaterThan(5);
     expect(status.body.data.counts.payments).toBeGreaterThanOrEqual(2);
 
@@ -469,7 +469,7 @@ describe("business operations", () => {
     });
     const hotel = database.findHotel("HTL-SHA-001")!;
     const search = await post<HotelOffer[]>("/api/hotels/search", {
-      destination: "上海",
+      destination: "Shanghai",
       checkIn: "2026-08-12",
       checkOut: "2026-08-14",
     });

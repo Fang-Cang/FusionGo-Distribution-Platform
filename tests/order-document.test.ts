@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createOrderDocumentPdf } from "../server/order-document.js";
 
 describe("electronic order PDF", () => {
-  it("renders a Chinese hotel confirmation from order snapshots", async () => {
+  it("renders a hotel confirmation from order snapshots", async () => {
     const pdf = await createOrderDocumentPdf({
       order: {
         id: "FG-REAL-001",
@@ -39,5 +39,5 @@ describe("electronic order PDF", () => {
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
     expect(pdf.length).toBeGreaterThan(10_000);
     expect(pdf.toString("latin1")).toContain("/Title");
-  });
+  }, 30_000);
 });

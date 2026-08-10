@@ -36,7 +36,7 @@ describe("FusionDatabase persistence", () => {
     first.insertOrder({
       order,
       supplier: "GLINK",
-      userId: "test-user",
+      userId: "user-demo",
       productSnapshot: hotel,
       contactSnapshot: { name: "TEST USER" },
     });
@@ -75,7 +75,7 @@ describe("FusionDatabase persistence", () => {
     expect(readFileSync(path).includes(Buffer.from("P99887766"))).toBe(false);
 
     const reopened = new FusionDatabase(path);
-    expect(reopened.findOrder(order.id, "test-user")?.status).toBe("PROCESSING");
+    expect(reopened.findOrder(order.id, "user-demo")?.status).toBe("PROCESSING");
     expect(reopened.listOrderEvents(order.id).map(event => event.eventType))
       .toEqual(["ORDER_CREATED", "PAYMENT_ACCEPTED"]);
     expect(reopened.getAccountProfile()).toMatchObject({
@@ -90,15 +90,15 @@ describe("FusionDatabase persistence", () => {
       givenName: "MINGYU",
       documentNo: "P9•••••66",
     });
-    expect(reopened.status().migrationVersion).toBe(11);
+    expect(reopened.status().migrationVersion).toBe(12);
     reopened.close();
   });
 
   it("returns no hotels when a destination has no matching local test data", () => {
     const database = new FusionDatabase(":memory:");
     database.seed(true);
-    expect(database.listHotels("上海")).toHaveLength(3);
-    expect(database.listHotels("深圳")).toEqual([]);
+    expect(database.listHotels("Shanghai")).toHaveLength(3);
+    expect(database.listHotels("Shenzhen")).toEqual([]);
     database.close();
   });
 });

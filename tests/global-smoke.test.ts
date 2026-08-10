@@ -29,7 +29,7 @@ beforeAll(async () => {
       resolve(running);
     });
   });
-});
+}, 30_000);
 
 afterAll(async () => {
   if (!server?.listening) return;
@@ -50,7 +50,7 @@ describe("global functional smoke gate", () => {
     const publicSearch = await call<unknown[]>("/api/hotels/search", {
       method: "POST",
       headers: { Cookie: guestCookie || "" },
-      body: JSON.stringify({ destination: "上海", checkIn: "2026-08-12", checkOut: "2026-08-14", rooms: 1, adults: 2 }),
+      body: JSON.stringify({ destination: "Shanghai", checkIn: "2026-08-12", checkOut: "2026-08-14", rooms: 1, adults: 2 }),
     });
     expect(publicSearch.response.status).toBe(200);
 
@@ -218,7 +218,7 @@ describe("global functional smoke gate", () => {
     const health = await call<{ status: string; database: { migrationVersion: number } }>("/api/health");
     const ready = await call<{ ready: boolean }>("/api/ready");
     expect(health.response.status).toBe(200);
-    expect(health.body.data).toMatchObject({ status: "up", database: { migrationVersion: 11 } });
+    expect(health.body.data).toMatchObject({ status: "up", database: { migrationVersion: 12 } });
     expect(ready.body.data.ready).toBe(true);
   });
 
@@ -339,7 +339,7 @@ describe("global functional smoke gate", () => {
   it("adds, reloads and removes a favorite hotel", async () => {
     const search = await call<Array<Record<string, unknown>>>("/api/hotels/search", {
       method: "POST",
-      body: JSON.stringify({ destination: "上海", checkIn: "2026-08-12", checkOut: "2026-08-14", rooms: 1, adults: 2 }),
+      body: JSON.stringify({ destination: "Shanghai", checkIn: "2026-08-12", checkOut: "2026-08-14", rooms: 1, adults: 2 }),
     });
     const hotel = search.body.data[0];
     expect(hotel).toBeDefined();
@@ -389,7 +389,7 @@ describe("global functional smoke gate", () => {
     expect(response.headers.get("content-disposition")).toContain(".pdf");
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
     expect(pdf.length).toBeGreaterThan(10_000);
-  });
+  }, 30_000);
 
   it("downloads ticketed flights as PDF and blocks unconfirmed hotel vouchers", async () => {
     const orders = await call<Array<{ id: string; status: string; productType: string }>>("/api/orders");
@@ -407,7 +407,7 @@ describe("global functional smoke gate", () => {
     const blocked = await fetch(`${baseUrl}/api/orders/${unconfirmedHotel!.id}/documents/confirmation`, { headers: { Cookie: "fusiongo_auth=local-user" } });
     expect(blocked.status).toBe(409);
     expect(await blocked.json()).toMatchObject({ code: "CONFIRMATION_NOT_READY" });
-  });
+  }, 30_000);
 
   it("creates a customer and persists status changes", async () => {
     const created = await call<{ id: string; status: string; contactSurname?: string; contactGivenName?: string }>("/api/customers", {

@@ -47,8 +47,8 @@ describe("EPS hotel confirmation email", () => {
     });
 
     for (const expected of [
-      "FG-REAL-001", "GLINK-REAL-001", "1张 King Bed", "不可退款", "请携带护照原件",
-      "房费小计", "税费", "到店另付", "FusionGo 客户支持", "https://support.example.com",
+      "FG-REAL-001", "GLINK-REAL-001", "1张 King Bed", "Non-refundable", "请携带护照原件",
+      "Room Subtotal", "Taxes &amp; Fees", "Charges at Property", "FusionGo Customer Support", "https://support.example.com",
     ]) expect(html).toContain(expected);
     expect(html).not.toContain("1284");
   });

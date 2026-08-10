@@ -20,6 +20,6 @@ describe("display FX service", () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify([
       { date: "2026-08-05", base: "CNY", quote: "USD", rate: 0.14816 },
     ]), { status: 200 }));
-    await expect(getDisplayFxRates(fetcher)).rejects.toThrow("缺少所需币种");
+    await expect(getDisplayFxRates(fetcher)).rejects.toThrow("missing required currencies");
   });
 });
