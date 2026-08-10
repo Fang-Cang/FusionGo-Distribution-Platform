@@ -8,6 +8,16 @@ export const simulatedSupplierDataAllowed = (
   // Sandbox explicit simulation fallback (for running UI before real FCG credentials are available)
   || (fcgMode === "sandbox" && simulationFlag === "true");
 
+export const localHotelSimulationAllowed = (
+  mode: "mock" | "sandbox" | "production",
+  glinkConfigured: boolean,
+  nodeEnvironment = process.env.NODE_ENV,
+  simulationFlag = process.env.FCG_SANDBOX_HOTEL_SIMULATION,
+) => mode === "mock"
+  || (mode === "sandbox"
+    && !glinkConfigured
+    && simulatedSupplierDataAllowed(nodeEnvironment, mode, simulationFlag));
+
 export function isSupplierCommerceRequest(method: string, path: string) {
   if (path.startsWith("/api/hotels/") || path.startsWith("/api/flights/") || path.startsWith("/api/integration/")) {
     // Destination keyword lookup is a read-only metadata search (no prices,

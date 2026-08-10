@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSupplierCommerceRequest, simulatedSupplierDataAllowed } from "../server/real-data-policy.js";
+import { isSupplierCommerceRequest, localHotelSimulationAllowed, simulatedSupplierDataAllowed } from "../server/real-data-policy.js";
 
 describe("real supplier data policy", () => {
   it("allows simulated supplier data only inside automated tests or sandbox+simulation flag", () => {
@@ -14,6 +14,14 @@ describe("real supplier data policy", () => {
     // 非 sandbox 模式即使开了 flag 也不允许
     expect(simulatedSupplierDataAllowed("production", "mock", "true")).toBe(false);
     expect(simulatedSupplierDataAllowed("production", "production", "true")).toBe(false);
+  });
+
+  it("uses local hotels only for mock mode or credential-free sandbox simulation", () => {
+    expect(localHotelSimulationAllowed("mock", false, "production", "false")).toBe(true);
+    expect(localHotelSimulationAllowed("sandbox", false, "production", "true")).toBe(true);
+    expect(localHotelSimulationAllowed("sandbox", true, "production", "true")).toBe(false);
+    expect(localHotelSimulationAllowed("sandbox", false, "production", "false")).toBe(false);
+    expect(localHotelSimulationAllowed("production", false, "production", "true")).toBe(false);
   });
 
   it("covers search, verification, order writes and after-sales reads", () => {

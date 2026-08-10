@@ -50,7 +50,7 @@ import { verifyFcgWebhook } from "./fcg/webhook.js";
 import { getDisplayFxRates } from "./fx.js";
 import { createOrderDocumentPdf } from "./order-document.js";
 import { createHotelConfirmationEmailHtml } from "./order-email.js";
-import { isSupplierCommerceRequest, simulatedSupplierDataAllowed } from "./real-data-policy.js";
+import { isSupplierCommerceRequest, localHotelSimulationAllowed, simulatedSupplierDataAllowed } from "./real-data-policy.js";
 import { openFusionDatabase, type UpstreamOrderContext } from "./database.js";
 import { isoNationalityOptions, mergeSupplierNationalities } from "./reference/nationalities.js";
 
@@ -82,6 +82,10 @@ const simulatedHotelOffers = new Map<string, HotelOffer>();
 const sandboxHotelSimulationEnabled = runtime.mode === "sandbox"
   && simulatedSupplierDataAllowed()
   && process.env.FCG_SANDBOX_HOTEL_SIMULATION === "true";
+const useLocalHotelSimulation = localHotelSimulationAllowed(
+  runtime.mode,
+  runtime.glinkConfigured,
+);
 const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
   .split(",")
   .map(value => value.trim())
@@ -668,7 +672,7 @@ app.post("/api/hotels/search", async (req, res) => {
     }
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Please fill in the complete search criteria" });
-  if (runtime.mode === "mock") {
+  if (useLocalHotelSimulation) {
     const nights = hotelNightCount(parsed.data.checkIn, parsed.data.checkOut);
     return res.json(ok(database.listHotels(parsed.data.destination).map(offer => {
       const context = {
@@ -748,7 +752,7 @@ app.post("/api/hotels/destination", async (req, res, next) => {
 app.post("/api/hotels/by-id", async (req, res, next) => {
   const parsed = z.object({ hotelId: z.string().min(1), hotelName: z.string().optional() }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Missing hotel identifier" });
-  if (runtime.mode === "mock") {
+  if (useLocalHotelSimulation) {
     const hotels = database.listHotels(parsed.data.hotelName || parsed.data.hotelId);
     const hotel = hotels.find(h => h.id === parsed.data.hotelId) || hotels[0];
     if (!hotel) throw new Error("Hotel not found");
@@ -787,7 +791,7 @@ app.post("/api/hotels/by-id", async (req, res, next) => {
 app.post("/api/hotels/filters", async (req, res) => {
   const parsed = z.object({ destinationId: z.string().min(1) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Missing destination identifier" });
-  if (runtime.mode === "mock") return res.json(ok({ stars: [3, 4, 5], facilities: ["Free Wi-Fi", "Parking", "Fitness Center"] }));
+  if (useLocalHotelSimulation) return res.json(ok({ stars: [3, 4, 5], facilities: ["Free Wi-Fi", "Parking", "Fitness Center"] }));
   const filters = await runtime.glink.glink<unknown>("/search/hotelFilters", { destinationId: parsed.data.destinationId, language: "zh-CN", distance: 10 });
   return res.json(ok(filters));
 });
@@ -827,7 +831,7 @@ app.post("/api/integration/glink/lowest-prices", async (req, res) => {
 app.post("/api/hotels/product-details", async (req, res) => {
   const parsed = z.object({ offerId: z.string().min(1) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Missing hotel quote identifier" });
-  if (runtime.mode === "mock") {
+  if (useLocalHotelSimulation) {
     const offer = database.findHotel(parsed.data.offerId);
     if (!offer) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "Hotel quote has expired" });
     return res.json(ok([{
@@ -881,7 +885,7 @@ app.post("/api/hotels/availability", async (req, res) => {
       nights: simulatedOffer.nights,
     }));
   }
-  if (runtime.mode === "mock") {
+  if (useLocalHotelSimulation) {
     const hotel = database.findHotel(parsed.data.offerId);
     if (!hotel) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "Room quote has expired. Please search again." });
     const context = hotelStayContexts.get(hotel.id) || {
@@ -1360,8 +1364,7 @@ app.post("/api/orders", async (req, res) => {
     }
   }
 
-  if (runtime.mode === "mock") {
-    if (parsed.data.productType === "hotel") {
+  if (useLocalHotelSimulation && parsed.data.productType === "hotel") {
       const hotel = database.findHotel(parsed.data.offerId);
       if (!hotel) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "Hotel quote has expired. Please search again." });
       const availability = database.getHotelAvailability(hotel.id);
@@ -1411,8 +1414,9 @@ app.post("/api/orders", async (req, res) => {
         },
       });
       return createdResponse(persisted);
-    }
+  }
 
+  if (runtime.mode === "mock" && parsed.data.productType === "flight") {
     const flight = database.findFlight(parsed.data.offerId);
     if (!flight) return res.status(404).json({ code: "OFFER_NOT_FOUND", message: "Flight quote has expired. Please search again." });
     const verification = database.getFlightVerification(flight.id, flight.priceKey);
