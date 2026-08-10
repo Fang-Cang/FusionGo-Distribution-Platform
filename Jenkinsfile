@@ -15,25 +15,6 @@ pipeline {
             }
         }
 
-        stage('Prepare env') {
-            steps {
-                script {
-                    // docker-compose.yml 声明了 env_file: - .env，若部署机未手动创建 .env，
-                    // docker compose 会直接报错；这里兜底创建一个空 .env，
-                    // 让容器使用 docker-compose.yml 中 environment 段的 sandbox 模拟默认值。
-                    // 后续拿到 FCG 真实凭证后，只需在该目录写入 .env 即可覆盖默认值，无需改代码。
-                    sh '''
-                        if [ ! -f .env ]; then
-                            touch .env
-                            echo "[deploy] .env 不存在，已创建空文件；容器将使用 docker-compose.yml 内置的 sandbox 模拟兜底配置。"
-                        else
-                            echo "[deploy] 已检测到部署机 .env，其变量将覆盖 docker-compose.yml 默认值。"
-                        fi
-                    '''
-                }
-            }
-        }
-
         stage('Deploy with Docker Compose') {
             steps {
                 script {
