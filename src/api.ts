@@ -12,6 +12,7 @@ import type {
   FlightOffer,
   FavoriteHotel,
   HotelOffer,
+  HotelBasicInfo,
   HotelPriceBreakdown,
   OrderBookingDetails,
   PaymentMethod,
@@ -108,7 +109,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   getDestination: (keyword: string, signal?: AbortSignal) =>
-    request<Array<{ name: string; detail: string; destinationId: string; cityCode: string }>>("/api/hotels/destination", {
+    request<Array<{ name: string; detail: string; cityCode: string; destinationId?: string; destinationType: number; source?: number; hotelId?: number; latGoogle: number; lngGoogle: number }>>("/api/hotels/destination", {
       method: "POST",
       body: JSON.stringify({ keyword }),
       signal,
@@ -119,7 +120,7 @@ export const api = {
       body: JSON.stringify({ hotelId, hotelName }),
     }),
   searchHotels: (
-    params: { destination: string; checkIn: string; checkOut: string; rooms?: number; adults?: number; children?: number; childAges?: number[] },
+    params: { destination: string; cityCode?: string; destinationId?: string; destinationType?: number; source?: number; hotelId?: number; latGoogle?: number; lngGoogle?: number; language?: "zh-CN" | "en-US"; checkIn: string; checkOut: string; rooms?: number; adults?: number; children?: number; childAges?: number[] },
     signal?: AbortSignal,
   ) =>
     request<HotelOffer[]>("/api/hotels/search", {
@@ -131,6 +132,11 @@ export const api = {
     request<HotelOffer[]>("/api/hotels/product-details", {
       method: "POST",
       body: JSON.stringify({ offerId }),
+    }),
+  getHotelDetail: (hotelId: number | string) =>
+    request<HotelBasicInfo>("/api/hotels/detail", {
+      method: "POST",
+      body: JSON.stringify({ hotelId }),
     }),
   checkHotelAvailability: (offerId: string) =>
     request<{

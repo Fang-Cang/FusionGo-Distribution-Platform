@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { FlightOffer, HotelOffer, HotelPriceBreakdown, NationalityOption } from "../../src/types.js";
+import type { FlightOffer, HotelBasicInfo, HotelOffer, HotelPriceBreakdown, NationalityOption } from "../../src/types.js";
 import { FcgError, type FcgClient } from "./client.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -18,6 +18,34 @@ const optionalNumber = (value: unknown): number | undefined => {
   if (value === undefined || value === null || value === "") return undefined;
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+};
+const GLINK_HOTEL_STAR_ENUM = new Map<number, number>([
+  [19, 5], // 五星级
+  [29, 5], // 豪华型（准五星）
+  [39, 4], // 四星级
+  [49, 4], // 高档型（准四星）
+  [59, 3], // 三星级
+  [64, 3], // 舒适型（准三星）
+  [69, 2], // 二星级
+  [66, 2], // 经济型（准二星）
+  [79, 2], // 二星级以下 / 公寓
+]);
+
+export const normalizeGlinkHotelStars = (...candidates: unknown[]): number | undefined => {
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null || candidate === "") continue;
+    const matched = String(candidate).match(/\d+(?:\.\d+)?/);
+    if (!matched) continue;
+    const raw = Number(matched[0]);
+    const normalized = GLINK_HOTEL_STAR_ENUM.get(raw)
+      ?? (raw >= 100 && raw <= 500 && raw % 100 === 0
+      ? raw / 100
+      : raw >= 10 && raw <= 50 && raw % 10 === 0
+        ? raw / 10
+        : raw);
+    if (normalized >= 1 && normalized <= 5) return Math.round(normalized);
+  }
+  return undefined;
 };
 const plainText = (value: unknown): string => string(value)
   .replace(/<br\s*\/?>/gi, "；")
@@ -56,6 +84,49 @@ export class GlinkNoProductError extends Error {
   }
 }
 
+export async function queryGlinkHotelBasicInfo(client: FcgClient, hotelId: number): Promise<HotelBasicInfo> {
+  const [detailResponse, imageResponse] = await Promise.all([
+    client.glink<unknown>("/hotel/detail", {
+      hotelIds: [String(hotelId)],
+      language: "zh-CN",
+      settings: ["comment", "hotelFacilityNew", "importantNotices"],
+    }),
+    client.glink<unknown>("/hotel/images", { hotelIds: [String(hotelId)] }),
+  ]);
+  const detailData = record(detailResponse);
+  const detail = record(array(detailData.hotelInfos)[0] ?? detailData);
+  if (!number(detail.hotelId, hotelId)) throw new Error("上游未返回酒店基础信息");
+  const comment = record(array(detail.comment)[0] ?? detail.comment);
+  const imageData = record(imageResponse);
+  const imageGroup = record(array(imageData.hotelImages)[0] ?? imageData);
+  const images = array(imageGroup.images).map(record)
+    .map(image => string(image.url, string(image.orgImageUrl, string(image.imageUrl))).replace(/^http:\/\//, "https://"))
+    .filter((url, index, all) => Boolean(url) && all.indexOf(url) === index);
+  const facilities = array(detail.facility).map(record)
+    .filter(item => string(item.categoryType) !== "2" && number(item.status, 1) !== 0)
+    .map(item => string(item.name)).filter((name, index, all) => Boolean(name) && all.indexOf(name) === index);
+  return {
+    hotelId: number(detail.hotelId, hotelId),
+    name: string(detail.hotelName, "未知酒店"),
+    city: string(detail.cityName, string(detail.city)),
+    district: string(detail.distinctName, string(detail.districtName, string(detail.businessName))),
+    ...(string(detail.address) ? { address: string(detail.address) } : {}),
+    ...(string(detail.phone) ? { phone: string(detail.phone) } : {}),
+    ...(normalizeGlinkHotelStars(detail.hotelStar, detail.starRating, detail.hotelStarName) !== undefined
+      ? { stars: normalizeGlinkHotelStars(detail.hotelStar, detail.starRating, detail.hotelStarName) }
+      : {}),
+    ...(optionalNumber(comment.averageScore) !== undefined ? { rating: optionalNumber(comment.averageScore) } : {}),
+    ...(string(comment.source) ? { ratingSource: string(comment.source) } : {}),
+    ...(plainText(detail.hotelIntroduce) ? { introduction: plainText(detail.hotelIntroduce) } : {}),
+    ...(string(detail.checkInTime) ? { checkInTime: string(detail.checkInTime) } : {}),
+    ...(string(detail.checkInLateTime) ? { checkInLateTime: string(detail.checkInLateTime) } : {}),
+    ...(string(detail.checkOutTime) ? { checkOutTime: string(detail.checkOutTime) } : {}),
+    facilities,
+    images,
+    importantNotices: array(detail.importantNotices).map(record).map(item => plainText(item.informText)).filter(Boolean),
+  };
+}
+
 export interface HotelQuoteContext {
   id: string;
   hotelId: number;
@@ -88,6 +159,7 @@ export interface HotelQuoteContext {
   priceBreakdown?: HotelPriceBreakdown;
   city?: string;
   cityCode?: string;
+  searchMatch?: "exact" | "nearby";
   district?: string;
   rating?: number;
   ratingSource?: string;
@@ -313,6 +385,14 @@ export async function searchGlinkHotels(
   client: FcgClient,
   input: {
     destination: string;
+    cityCode?: string;
+    destinationId?: string;
+    destinationType?: number;
+    source?: number;
+    hotelId?: number;
+    latGoogle?: number;
+    lngGoogle?: number;
+    language?: "zh-CN" | "en-US";
     checkIn: string;
     checkOut: string;
     rooms?: number;
@@ -321,24 +401,31 @@ export async function searchGlinkHotels(
     childAges?: number[];
   },
 ) {
-  const destinations = await client.glink<unknown>("/search/destination", {
-    keyWord: input.destination,
-    destinationType: "2",
-    source: 0,
-  });
-  const destinationCandidates = array(destinations).map(record);
-  const normalizedDestination = input.destination.trim().toLowerCase().replace(/\s+/g, " ");
-  const destination = destinationCandidates.find(item => number(item.destinationType) === 2
-    && [string(item.cityName), string(item.destinationName), string(item.name)]
-      .some(name => name.toLowerCase().replace(/\s+/g, " ") === normalizedDestination))
-    ?? destinationCandidates.find(item => number(item.destinationType) === 2)
-    ?? record(destinationCandidates[0]);
-  const destinationId = string(destination.destinationId);
-  if (!destinationId) throw new Error(`未找到目的地“${input.destination}”`);
-  const destinationCityCode = string(destination.cityCode).toUpperCase();
-  if (!destinationCityCode) throw new Error(`目的地“${input.destination}”缺少城市编码，已阻止返回无法校验城市的酒店`);
+  const language = input.language ?? "en-US";
+  let destinationCityCode = string(input.cityCode).toUpperCase();
+  let destinationType = number(input.destinationType);
+  let latGoogle = optionalNumber(input.latGoogle);
+  let lngGoogle = optionalNumber(input.lngGoogle);
+  if (latGoogle === undefined || lngGoogle === undefined) {
+    const destinations = await client.glink<unknown>("/search/destination", {
+      keyWord: input.destination,
+      source: 1,
+    });
+    const destinationCandidates = array(destinations).map(record);
+    const normalizedDestination = input.destination.trim().toLowerCase().replace(/\s+/g, " ");
+    const destination = destinationCandidates.find(item =>
+      [string(item.destinationName), string(item.cityName), string(item.name)]
+        .some(name => name.toLowerCase().replace(/\s+/g, " ") === normalizedDestination))
+      ?? destinationCandidates.find(item => number(item.destinationType) === 2)
+      ?? record(destinationCandidates[0]);
+    destinationCityCode = string(destination.cityCode).toUpperCase();
+    destinationType = number(destination.destinationType);
+    latGoogle = optionalNumber(destination.latGoogle);
+    lngGoogle = optionalNumber(destination.lngGoogle);
+  }
+  if (latGoogle === undefined || lngGoogle === undefined) throw new Error(`未找到目的地“${input.destination}”的经纬度`);
   const saleable = await queryGlinkSaleableHotelIds(client, {
-    cityCode: string(destination.cityCode) || undefined,
+    cityCode: destinationCityCode || undefined,
   });
   if (!saleable.hotelIds.length) {
     return {
@@ -349,21 +436,42 @@ export async function searchGlinkHotels(
   }
   const saleableIds = new Set(saleable.hotelIds);
 
-  const listData = record(await client.glink<unknown>("/search/hotelList", {
-    destinationId,
+  const listRequest = {
     checkInDate: input.checkIn,
     checkOutDate: input.checkOut,
-    distance: 10,
     currentPage: 1,
     pageSize: 6,
     sortBy: 1,
-    language: "zh-CN",
-  }));
-  const hotelRows = array(listData.list).map(record)
-    .filter(item => saleableIds.has(number(item.hotelId))
+    language,
+  };
+  const isHotelDestination = destinationType === 1;
+  let searchMatch: "exact" | "nearby" = isHotelDestination ? "exact" : "nearby";
+  let listData = isHotelDestination
+    ? record(await client.glink<unknown>("/search/hotelList", input.destinationId
+      ? { ...listRequest, destinationId: input.destinationId }
+      : { ...listRequest, latGoogle, lngGoogle, distance: 10, keyWord: input.destination }))
+    : record(await client.glink<unknown>("/search/hotelList", {
+      ...listRequest, latGoogle, lngGoogle, distance: 10,
+    }));
+  let rawHotelRows = array(listData.list).map(record);
+  if (isHotelDestination) {
+    const normalizedHotelName = input.destination.trim().toLowerCase().replace(/\s+/g, " ");
+    rawHotelRows = rawHotelRows.filter(item => input.hotelId
+      ? number(item.hotelId) === input.hotelId
+      : string(item.hotelName).trim().toLowerCase().replace(/\s+/g, " ") === normalizedHotelName);
+  }
+  const eligibleRows = (rows: JsonRecord[]) => rows.filter(item => saleableIds.has(number(item.hotelId))
       && Boolean(string(item.hotelName))
-      && string(item.cityCode).toUpperCase() === destinationCityCode)
+      && (!destinationCityCode || string(item.cityCode).toUpperCase() === destinationCityCode))
     .slice(0, 10);
+  let hotelRows = eligibleRows(rawHotelRows);
+  if (isHotelDestination && !hotelRows.length) {
+    searchMatch = "nearby";
+    listData = record(await client.glink<unknown>("/search/hotelList", {
+      ...listRequest, latGoogle, lngGoogle, distance: 10,
+    }));
+    hotelRows = eligibleRows(array(listData.list).map(record));
+  }
   const candidateIds = hotelRows.map(item => number(item.hotelId)).filter(Boolean);
   if (!candidateIds.length) {
     return {
@@ -378,7 +486,9 @@ export async function searchGlinkHotels(
     checkOutDate: input.checkOut,
   });
   const pricedRows = hotelRows.filter(item => lowest.prices.has(number(item.hotelId)));
-  const hotelIds = pricedRows.map(item => string(item.hotelId));
+  const allowsUnpricedListings = destinationType !== 2;
+  const displayRows = allowsUnpricedListings ? hotelRows : pricedRows;
+  const hotelIds = displayRows.map(item => string(item.hotelId));
   if (!hotelIds.length) {
     return {
       offers: [] as HotelOffer[],
@@ -390,7 +500,7 @@ export async function searchGlinkHotels(
   const [detailResponse, imageResponse] = await Promise.all([
     client.glink<unknown>("/hotel/detail", {
       hotelIds,
-      language: "zh-CN",
+      language,
       settings: ["comment", "hotelFacilityNew", "importantNotices"],
     }),
     client.glink<unknown>("/hotel/images", { hotelIds }),
@@ -409,16 +519,20 @@ export async function searchGlinkHotels(
   }));
 
   const quotes: HotelQuoteContext[] = [];
-  const offers = pricedRows.map((row): HotelOffer => {
+  const offers = displayRows.map((row): HotelOffer => {
     const hotelId = number(row.hotelId);
     const detail = details.get(string(row.hotelId)) ?? {};
     const comment = record(array(detail.comment)[0] ?? detail.comment);
     const upstreamRating = optionalNumber(row.hotelScore) ?? optionalNumber(comment.averageScore);
-    const upstreamStars = optionalNumber(row.hotelStar);
+    const stars = normalizeGlinkHotelStars(
+      row.hotelStar,
+      detail.hotelStar,
+      row.starRating,
+      detail.starRating,
+      row.hotelStarName,
+      detail.hotelStarName,
+    );
     const rating = upstreamRating !== undefined && upstreamRating > 0 ? upstreamRating : undefined;
-    const stars = upstreamStars !== undefined && upstreamStars >= 1 && upstreamStars <= 5
-      ? Math.round(upstreamStars)
-      : undefined;
     const image = string(row.mainUrl, images.get(string(row.hotelId)) || string(detail.appearancePicUrl))
       .replace(/^http:\/\//, "https://");
     const hotelName = string(detail.hotelName, string(row.hotelName));
@@ -438,6 +552,7 @@ export async function searchGlinkHotels(
       nightlyPrice: lowest.prices.get(hotelId) || 0,
       city,
       cityCode: destinationCityCode,
+      searchMatch,
       district,
       ...(rating !== undefined ? { rating } : {}),
       ...(string(comment.source) ? { ratingSource: string(comment.source) } : {}),
@@ -447,7 +562,7 @@ export async function searchGlinkHotels(
         ...array(row.hotelLabelNameList).map(label => string(label)).filter(Boolean),
         string(row.brandName),
         string(row.groupName),
-        "G-Link 实时库存",
+        language === "en-US" ? "G-Link Live Inventory" : "G-Link 实时库存",
       ].filter(Boolean),
       ...([string(detail.checkInTime), string(detail.checkInLateTime)].some(Boolean) ? {
         checkInInstructions: `办理入住：${string(detail.checkInTime, "上游未注明最早时间")}–${string(detail.checkInLateTime, "上游未注明最晚时间")}`,
@@ -461,19 +576,21 @@ export async function searchGlinkHotels(
     quotes.push(quote);
     return {
       id: quote.id,
+      hotelId,
       inventorySource: "glink",
       name: quote.hotelName,
       city: quote.city || "",
       cityCode: quote.cityCode,
+      searchMatch: quote.searchMatch,
       district: quote.district || "",
       ...(quote.rating !== undefined ? { rating: quote.rating } : {}),
       ...(quote.ratingSource ? { ratingSource: quote.ratingSource } : {}),
       ...(quote.stars !== undefined ? { stars: quote.stars } : {}),
       ...(quote.image ? { image: quote.image } : {}),
-      tags: quote.tags || ["G-Link 实时库存"],
-      roomName: "进入详情查看实时房型",
-      breakfast: "以实时产品为准",
-      cancelPolicy: "以实时取消政策为准",
+      tags: quote.tags || [language === "en-US" ? "G-Link Live Inventory" : "G-Link 实时库存"],
+      roomName: language === "en-US" ? "View real-time room types" : "进入详情查看实时房型",
+      breakfast: language === "en-US" ? "Subject to real-time product details" : "以实时产品为准",
+      cancelPolicy: language === "en-US" ? "Subject to real-time cancellation policy" : "以实时取消政策为准",
       nightlyPrice: quote.nightlyPrice,
       currency: quote.currency,
       checkInDate: quote.checkInDate,
@@ -549,6 +666,8 @@ function mapGlinkProduct(
     quote: next,
     offer: {
       id: next.id,
+      hotelId: next.hotelId,
+      roomId: next.roomId,
       inventorySource: "glink",
       name: next.hotelName,
       city: quote.city || "",

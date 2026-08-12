@@ -90,7 +90,7 @@ describe("FusionDatabase persistence", () => {
       givenName: "MINGYU",
       documentNo: "P9•••••66",
     });
-    expect(reopened.status().migrationVersion).toBe(12);
+    expect(reopened.status().migrationVersion).toBe(13);
     reopened.close();
   });
 
@@ -99,6 +99,20 @@ describe("FusionDatabase persistence", () => {
     database.seed(true);
     expect(database.listHotels("Shanghai")).toHaveLength(3);
     expect(database.listHotels("Shenzhen")).toEqual([]);
+    database.close();
+  });
+
+  it("stores supplier destination Google coordinates", () => {
+    const database = new FusionDatabase(":memory:");
+    database.saveDestinationResponses("Tokyo", [{
+      name: "Tokyo",
+      detail: "Japan · Tokyo",
+      cityCode: "TYO",
+      destinationType: 2,
+      latGoogle: 35.6762,
+      lngGoogle: 139.6503,
+    }]);
+    expect(database.status().counts.destinations).toBe(1);
     database.close();
   });
 });

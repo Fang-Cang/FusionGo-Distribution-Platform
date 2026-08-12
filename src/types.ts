@@ -102,10 +102,13 @@ export interface FlightAddOns {
 
 export interface HotelOffer {
   id: string;
+  hotelId?: number | string;
+  roomId?: number | string;
   inventorySource?: "glink" | "simulation";
   name: string;
   city: string;
   cityCode?: string;
+  searchMatch?: "exact" | "nearby";
   district: string;
   rating?: number;
   ratingSource?: string;
@@ -137,6 +140,25 @@ export interface HotelOffer {
   nights?: number;
   totalPrice?: number;
   maxRoomCount?: number;
+}
+
+export interface HotelBasicInfo {
+  hotelId: number | string;
+  name: string;
+  city: string;
+  district: string;
+  address?: string;
+  phone?: string;
+  stars?: number;
+  rating?: number;
+  ratingSource?: string;
+  introduction?: string;
+  checkInTime?: string;
+  checkInLateTime?: string;
+  checkOutTime?: string;
+  facilities: string[];
+  images: string[];
+  importantNotices: string[];
 }
 
 export interface FavoriteHotel extends HotelOffer {

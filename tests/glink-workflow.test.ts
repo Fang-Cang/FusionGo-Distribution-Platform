@@ -4,6 +4,8 @@ import {
   createGlinkOrder,
   hydrateGlinkProduct,
   hydrateGlinkProducts,
+  normalizeGlinkHotelStars,
+  queryGlinkHotelBasicInfo,
   searchGlinkHotels,
   synchronizeHotelQuoteFromAvailability,
   type HotelQuoteContext,
@@ -20,12 +22,16 @@ import {
   GLINK_SANDBOX_TEST_HOTELS,
 } from "../server/fcg/glink-sandbox-test-data.js";
 
-function stubClient(responses: Record<string, unknown>) {
+function stubClient(responses: Record<string, unknown | ((callNumber: number) => unknown)>) {
   const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const callCounts = new Map<string, number>();
   const client = {
     async glink(path: string, body: Record<string, unknown>) {
       calls.push({ path, body });
-      return structuredClone(responses[path]);
+      const callNumber = (callCounts.get(path) || 0) + 1;
+      callCounts.set(path, callNumber);
+      const response = responses[path];
+      return structuredClone(typeof response === "function" ? response(callNumber) : response);
     },
   } as unknown as FcgClient;
   return { client, calls };
@@ -44,6 +50,24 @@ const baseQuote: HotelQuoteContext = {
 };
 
 describe("G-Link mandatory hotel workflow", () => {
+  it.each([
+    [19, 5], [29, 5], [39, 4], [49, 4], [59, 3], [64, 3], [69, 2], [66, 2], [79, 2],
+  ])("maps Open Platform hotel-star enum %i into FusionGo %i-star filtering", (upstream, expected) => {
+    expect(normalizeGlinkHotelStars(upstream)).toBe(expected);
+  });
+
+  it("maps hotel basic information and images for the detail page", async () => {
+    const { client, calls } = stubClient({
+      "/hotel/detail": { hotelInfos: [{ hotelId: 10583772, hotelName: "深圳真实酒店", cityName: "深圳", distinctName: "南山区", address: "测试路 1 号", hotelStar: "5星", hotelIntroduce: "<p>酒店简介</p>", checkInTime: "14:00", checkOutTime: "12:00", comment: [{ averageScore: "4.6", source: "G-Link" }], facility: [{ categoryType: "1", status: 1, name: "健身中心" }], importantNotices: [{ informText: "入住须知" }] }] },
+      "/hotel/images": { hotelImages: [{ hotelId: 10583772, images: [{ isMain: 1, url: "http://example.com/main.jpg" }] }] },
+    });
+
+    const detail = await queryGlinkHotelBasicInfo(client, 10583772);
+    expect(detail).toMatchObject({ name: "深圳真实酒店", address: "测试路 1 号", stars: 5, rating: 4.6, facilities: ["健身中心"], images: ["https://example.com/main.jpg"] });
+    expect(detail.introduction).toBe("酒店简介");
+    expect(calls.map(call => call.path)).toEqual(["/hotel/detail", "/hotel/images"]);
+  });
+
   it("loads the normalized official sandbox hotel list only in sandbox", () => {
     expect(GLINK_SANDBOX_TEST_HOTELS).toHaveLength(148);
     expect(new Set(GLINK_SANDBOX_TEST_HOTELS.map(hotel => hotel.hotelId)).size).toBe(148);
@@ -56,7 +80,7 @@ describe("G-Link mandatory hotel workflow", () => {
 
   it("gates the list by saleable mapping and hotel/lowestPrice", async () => {
     const { client, calls } = stubClient({
-      "/search/destination": [{ destinationId: "SHA", destinationType: 2, cityCode: "SHA" }],
+      "/search/destination": [{ destinationType: 2, cityCode: "SHA", latGoogle: 31.2304, lngGoogle: 121.4737 }],
       "/search/hotelIdList": { hotelIds: [10583772], totalCount: 1 },
       "/search/hotelList": {
         list: [
@@ -71,12 +95,13 @@ describe("G-Link mandatory hotel workflow", () => {
           priceItems: [{ saleDate: "2026-09-01", salePrice: 88 }],
         }],
       },
-      "/hotel/detail": { hotelInfos: [{ hotelId: 10583772, hotelName: "Mapped Hotel" }] },
+      "/hotel/detail": { hotelInfos: [{ hotelId: 10583772, hotelName: "Mapped Hotel", hotelStar: 29 }] },
       "/hotel/images": { hotelImages: [] },
     });
 
     const result = await searchGlinkHotels(client, {
       destination: "上海",
+      language: "en-US",
       checkIn: "2026-09-01",
       checkOut: "2026-09-02",
       rooms: 1,
@@ -87,8 +112,15 @@ describe("G-Link mandatory hotel workflow", () => {
     expect(result.offers[0].nightlyPrice).toBe(88);
     expect(result.offers[0].inventorySource).toBe("glink");
     expect(result.offers[0].rating).toBeUndefined();
-    expect(result.offers[0].stars).toBeUndefined();
+    expect(result.offers[0].stars).toBe(5);
     expect(result.offers[0].image).toBeUndefined();
+    expect(result.offers[0]).toMatchObject({
+      roomName: "View real-time room types",
+      breakfast: "Subject to real-time product details",
+      cancelPolicy: "Subject to real-time cancellation policy",
+    });
+    expect(calls.find(call => call.path === "/search/hotelList")?.body.language).toBe("en-US");
+    expect(calls.find(call => call.path === "/hotel/detail")?.body.language).toBe("en-US");
     expect(calls.map(call => call.path)).toEqual([
       "/search/destination",
       "/search/hotelIdList",
@@ -99,9 +131,139 @@ describe("G-Link mandatory hotel workflow", () => {
     ]);
   });
 
+  it("uses selected coordinates without resolving an ambiguous city name again", async () => {
+    const { client, calls } = stubClient({
+      "/search/hotelIdList": { hotelIds: [], totalCount: 0 },
+    });
+
+    await searchGlinkHotels(client, {
+      destination: "London",
+      cityCode: "6057873",
+      destinationType: 8,
+      latGoogle: 42.98695,
+      lngGoogle: -81.243179,
+      checkIn: "2026-09-01",
+      checkOut: "2026-09-02",
+      rooms: 1,
+      adults: 1,
+    });
+
+    expect(calls.map(call => call.path)).toEqual(["/search/hotelIdList"]);
+    expect(calls[0]?.body).toMatchObject({ cityCode: "6057873" });
+  });
+
+  it("keeps a specifically searched hotel visible when lowestPrice has no price", async () => {
+    const { client, calls } = stubClient({
+      "/search/hotelIdList": { hotelIds: [467794], totalCount: 1 },
+      "/search/hotelList": {
+        list: [{ hotelId: 467794, hotelName: "深圳北站鑫酒店式公寓", cityName: "深圳", cityCode: "SZX" }],
+      },
+      "/hotel/lowestPrice": { currency: "CNY", hotelLowestPrices: [] },
+      "/hotel/detail": { hotelInfos: [{ hotelId: 467794, hotelName: "深圳北站鑫酒店式公寓", cityName: "深圳" }] },
+      "/hotel/images": { hotelImages: [] },
+    });
+
+    const result = await searchGlinkHotels(client, {
+      destination: "深圳北站鑫酒店式公寓",
+      cityCode: "SZX",
+      destinationId: "H467794",
+      destinationType: 1,
+      hotelId: 467794,
+      latGoogle: 22.6098,
+      lngGoogle: 114.031,
+      checkIn: "2026-09-01",
+      checkOut: "2026-09-02",
+      rooms: 1,
+      adults: 2,
+    });
+
+    expect(result.diagnostics.lowestPriceHotelCount).toBe(0);
+    expect(result.offers).toHaveLength(1);
+    expect(result.offers[0]).toMatchObject({
+      name: "深圳北站鑫酒店式公寓",
+      nightlyPrice: 0,
+      totalPrice: 0,
+      searchMatch: "exact",
+    });
+    expect(calls.find(call => call.path === "/search/hotelList")?.body).toMatchObject({ destinationId: "H467794" });
+    expect(calls.find(call => call.path === "/search/hotelList")?.body).not.toHaveProperty("latGoogle");
+  });
+
+  it("falls back to nearby hotels when an exact hotel destination is unavailable", async () => {
+    const { client, calls } = stubClient({
+      "/search/hotelIdList": { hotelIds: [112291], totalCount: 1 },
+      "/search/hotelList": (callNumber: number) => callNumber === 1
+        ? { list: [{ hotelId: 999999, hotelName: "Unavailable Hotel", cityName: "深圳", cityCode: "SZX" }] }
+        : { list: [{ hotelId: 112291, hotelName: "Nearby Hotel", cityName: "深圳", cityCode: "SZX" }] },
+      "/hotel/lowestPrice": { currency: "CNY", hotelLowestPrices: [] },
+      "/hotel/detail": { hotelInfos: [{ hotelId: 112291, hotelName: "Nearby Hotel", cityName: "深圳" }] },
+      "/hotel/images": { hotelImages: [] },
+    });
+
+    const result = await searchGlinkHotels(client, {
+      destination: "Unavailable Hotel",
+      cityCode: "SZX",
+      destinationId: "H999999",
+      destinationType: 1,
+      hotelId: 999999,
+      latGoogle: 22.6098,
+      lngGoogle: 114.031,
+      checkIn: "2026-09-01",
+      checkOut: "2026-09-02",
+      rooms: 1,
+      adults: 2,
+    });
+
+    const hotelListCalls = calls.filter(call => call.path === "/search/hotelList");
+    expect(hotelListCalls).toHaveLength(2);
+    expect(hotelListCalls[0]?.body).toMatchObject({ destinationId: "H999999" });
+    expect(hotelListCalls[1]?.body).toMatchObject({ latGoogle: 22.6098, lngGoogle: 114.031, distance: 10 });
+    expect(result.offers).toHaveLength(1);
+    expect(result.offers[0]).toMatchObject({ name: "Nearby Hotel", searchMatch: "nearby" });
+  });
+
+  it("keeps landmark hotel results visible when lowestPrice has no price", async () => {
+    const { client, calls } = stubClient({
+      "/search/hotelIdList": { hotelIds: [467794], totalCount: 1 },
+      "/search/hotelList": {
+        list: [{ hotelId: 467794, hotelName: "深圳北站鑫酒店式公寓", cityName: "深圳", cityCode: "SZX" }],
+      },
+      "/hotel/lowestPrice": { currency: "CNY", hotelLowestPrices: [] },
+      "/hotel/detail": { hotelInfos: [{ hotelId: 467794, hotelName: "深圳北站鑫酒店式公寓", cityName: "深圳" }] },
+      "/hotel/images": { hotelImages: [] },
+    });
+
+    const result = await searchGlinkHotels(client, {
+      destination: "深圳北站",
+      cityCode: "SZX",
+      destinationType: 8,
+      latGoogle: 22.610332,
+      lngGoogle: 114.030227,
+      checkIn: "2026-09-01",
+      checkOut: "2026-09-02",
+      rooms: 1,
+      adults: 2,
+    });
+
+    expect(result.diagnostics.lowestPriceHotelCount).toBe(0);
+    expect(result.offers).toHaveLength(1);
+    expect(result.offers[0]).toMatchObject({
+      name: "深圳北站鑫酒店式公寓",
+      nightlyPrice: 0,
+      totalPrice: 0,
+    });
+    const hotelListCall = calls.find(call => call.path === "/search/hotelList");
+    expect(hotelListCall?.body).toMatchObject({
+      latGoogle: 22.610332,
+      lngGoogle: 114.030227,
+      distance: 10,
+    });
+    expect(hotelListCall?.body).not.toHaveProperty("destinationId");
+  });
+
   it("does not invent ratings, stars, review counts, images or location facts", async () => {
     const { client } = stubClient({
-      "/search/destination": [{ destinationId: "SZX", destinationType: 2, cityCode: "SZX" }],
+      "/search/destination": [{ destinationType: 2, cityCode: "SZX", latGoogle: 22.5431, lngGoogle: 114.0579 }],
       "/search/hotelIdList": { hotelIds: [10583772], totalCount: 1 },
       "/search/hotelList": { list: [{ hotelId: 10583772, hotelName: "Supplier Hotel", cityName: "深圳", cityCode: "SZX", districtName: "null" }] },
       "/hotel/lowestPrice": { currency: "CNY", hotelLowestPrices: [{ hotelId: 10583772, priceItems: [{ saleDate: "2026-09-01", salePrice: 88 }] }] },
@@ -123,7 +285,7 @@ describe("G-Link mandatory hotel workflow", () => {
 
   it("passes through only supplier-provided score metadata", async () => {
     const { client } = stubClient({
-      "/search/destination": [{ destinationId: "SZX", destinationType: 2, cityCode: "SZX" }],
+      "/search/destination": [{ destinationType: 2, cityCode: "SZX", latGoogle: 22.5431, lngGoogle: 114.0579 }],
       "/search/hotelIdList": { hotelIds: [10583772], totalCount: 1 },
       "/search/hotelList": { list: [{ hotelId: 10583772, hotelName: "Supplier Hotel", cityName: "深圳", cityCode: "SZX", hotelStar: 4 }] },
       "/hotel/lowestPrice": { currency: "CNY", hotelLowestPrices: [{ hotelId: 10583772, priceItems: [{ saleDate: "2026-09-01", salePrice: 88 }] }] },
@@ -140,7 +302,7 @@ describe("G-Link mandatory hotel workflow", () => {
 
   it("rejects hotel-list rows whose cityCode does not match the resolved destination", async () => {
     const { client } = stubClient({
-      "/search/destination": [{ destinationId: "C3SZX", destinationType: 2, cityCode: "SZX", cityName: "深圳" }],
+      "/search/destination": [{ destinationType: 2, cityCode: "SZX", cityName: "深圳", latGoogle: 22.5431, lngGoogle: 114.0579 }],
       "/search/hotelIdList": { hotelIds: [10583772, 112291], totalCount: 2 },
       "/search/hotelList": { list: [
         { hotelId: 10583772, hotelName: "深圳真实酒店", cityName: "深圳", cityCode: "SZX" },
@@ -286,6 +448,7 @@ describe("G-Link mandatory hotel workflow", () => {
     const products = await hydrateGlinkProducts(client, baseQuote);
     expect(products).toHaveLength(3);
     expect(products.map(item => item.quote.ratePlanId)).toEqual(["nonref", "flex", "executive"]);
+    expect(products.map(item => item.offer.roomId)).toEqual([1001, 1001, 1002]);
     expect(products.map(item => item.offer.roomName)).toEqual(["豪华大床房", "豪华大床房", "行政双床房"]);
     expect(products.every(item => item.offer.id === item.quote.id)).toBe(true);
   });

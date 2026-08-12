@@ -35,6 +35,7 @@ const migration009 = readFileSync(migrationUrl("009_split_person_names.sql"), "u
 const migration010 = readFileSync(migrationUrl("010_hotel_favorites.sql"), "utf8");
 const migration011 = readFileSync(migrationUrl("011_local_user_auth.sql"), "utf8");
 const migration012 = readFileSync(migrationUrl("012_order_user_isolation.sql"), "utf8");
+const migration013 = readFileSync(migrationUrl("013_destination_cache.sql"), "utf8");
 
 type SqlValue = string | number | bigint | null | Uint8Array;
 type SqlParams = SqlValue[];
@@ -370,6 +371,7 @@ export class FusionDatabase {
       { version: 10, name: "010_hotel_favorites", sql: migration010 },
       { version: 11, name: "011_local_user_auth", sql: migration011 },
       { version: 12, name: "012_order_user_isolation", sql: migration012 },
+      { version: 13, name: "013_destination_cache", sql: migration013 },
     ];
     migrations.forEach(migration => {
       const current = this.db.prepare(
@@ -385,6 +387,47 @@ export class FusionDatabase {
     });
 
     this.backfillOrderUserIds();
+  }
+
+  saveDestinationResponses(queryKeyword: string, destinations: Array<{
+    name: string;
+    detail: string;
+    cityCode: string;
+    destinationType: number;
+    hotelId?: number;
+    latGoogle: number;
+    lngGoogle: number;
+  }>) {
+    const statement = this.db.prepare(`
+      INSERT INTO destination_cache(
+        cache_key, supplier, query_keyword, name, detail, city_code,
+        destination_type, hotel_id, lat_google, lng_google, updated_at
+      ) VALUES (?, 'GLINK', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(cache_key) DO UPDATE SET
+        query_keyword = excluded.query_keyword,
+        name = excluded.name,
+        detail = excluded.detail,
+        city_code = excluded.city_code,
+        destination_type = excluded.destination_type,
+        hotel_id = excluded.hotel_id,
+        lat_google = excluded.lat_google,
+        lng_google = excluded.lng_google,
+        updated_at = excluded.updated_at
+    `);
+    const keyword = queryKeyword.trim();
+    const updatedAt = nowIso();
+    this.transaction(() => destinations.forEach(destination => statement.run(
+      `${destination.destinationType}:${destination.name}:${destination.latGoogle}:${destination.lngGoogle}`,
+      keyword,
+      destination.name,
+      destination.detail,
+      destination.cityCode,
+      destination.destinationType,
+      destination.hotelId ?? null,
+      destination.latGoogle,
+      destination.lngGoogle,
+      updatedAt,
+    )));
   }
 
   private backfillOrderUserIds() {
@@ -1662,6 +1705,7 @@ export class FusionDatabase {
         profiles: count("user_profiles"),
         travelers: count("account_travelers"),
         hotelFavorites: count("account_hotel_favorites"),
+        destinations: count("destination_cache"),
       },
     };
   }

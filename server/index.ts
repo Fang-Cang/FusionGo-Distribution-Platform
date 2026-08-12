@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import type { DistributionOrder, FlightAddOns, HotelOffer, NationalityCatalog, OrderStatus, PaymentMethod } from "../src/types.js";
+import type { DistributionOrder, FlightAddOns, HotelBasicInfo, HotelOffer, NationalityCatalog, OrderStatus, PaymentMethod } from "../src/types.js";
 import {
   applyFlinkChange,
   applyFlinkRefund,
@@ -23,6 +23,7 @@ import {
   hydrateGlinkProducts,
   listFlinkNationalities,
   queryGlinkLowestPrices,
+  queryGlinkHotelBasicInfo,
   payFlinkOrder,
   payFlinkChange,
   refreshFlinkCabin,
@@ -651,6 +652,17 @@ app.get("/api/finance/summary", (_req, res) => res.json(ok(database.financeSumma
 app.post("/api/hotels/search", async (req, res) => {
   const parsed = z.object({
     destination: z.string().min(1),
+    cityCode: z.preprocess(
+      value => typeof value === "string" && !value.trim() ? undefined : value,
+      z.string().min(1).optional(),
+    ),
+    destinationId: z.string().min(1).optional(),
+    destinationType: z.number().int().min(1).optional(),
+    source: z.number().int().min(0).max(2).optional(),
+    hotelId: z.number().int().positive().optional(),
+    latGoogle: z.number().min(-90).max(90).optional(),
+    lngGoogle: z.number().min(-180).max(180).optional(),
+    language: z.enum(["zh-CN", "en-US"]).default("en-US"),
     checkIn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     checkOut: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     rooms: z.number().int().min(1).max(8).default(1),
@@ -698,7 +710,7 @@ app.post("/api/hotels/search", async (req, res) => {
     code: "GLINK_CATALOG_EMPTY",
     message: "The current G-Link sandbox account has no mapped saleable hotels. Please ask the supplier to configure test hotels and inventory first.",
   });
-  if (!result.diagnostics.lowestPriceHotelCount) return res.status(409).json({
+  if (!result.diagnostics.lowestPriceHotelCount && !result.offers.length) return res.status(409).json({
     code: "GLINK_LOWEST_PRICE_EMPTY",
     message: "Mapped hotels did not return daily lowest prices for the selected check-in date. The hotel list will not be displayed.",
   });
@@ -721,36 +733,53 @@ app.post("/api/hotels/destination", async (req, res, next) => {
     try {
       const raw = await runtime.glink.glink<unknown>("/search/destination", {
         keyWord: parsed.data.keyword,
-        destinationType: "2",
-        source: 0,
+        source: 1,
       });
       const items = Array.isArray(raw) ? raw : [];
       const destinations = items.map((item: any) => ({
-        name: item.cityName || item.destinationName || item.name || "",
+        name: item.destinationName || item.cityName || item.name || "",
         detail: [item.countryName, item.provinceName].filter(Boolean).join(" · "),
-        destinationId: String(item.destinationId || ""),
         cityCode: String(item.cityCode || ""),
-      })).filter(d => d.destinationId);
-      return res.json(ok(destinations));
+        destinationId: item.destinationId ? String(item.destinationId) : undefined,
+        destinationType: Number(item.destinationType || 0),
+        source: item.source === undefined ? undefined : Number(item.source),
+        hotelId: item.hotelId ? Number(item.hotelId) : undefined,
+        latGoogle: Number(item.latGoogle),
+        lngGoogle: Number(item.lngGoogle),
+      })).filter(d => Number.isFinite(d.latGoogle) && Number.isFinite(d.lngGoogle));
+      const uniqueDestinations = destinations.filter((item, index, all) => all.findIndex(candidate =>
+        candidate.name === item.name
+        && candidate.latGoogle === item.latGoogle
+        && candidate.lngGoogle === item.lngGoogle) === index);
+      const normalizedKeyword = parsed.data.keyword.trim().toLocaleLowerCase();
+      uniqueDestinations.sort((left, right) => {
+        const leftName = left.name.trim().toLocaleLowerCase();
+        const rightName = right.name.trim().toLocaleLowerCase();
+        return Number(rightName === normalizedKeyword) - Number(leftName === normalizedKeyword)
+          || Number(rightName.startsWith(normalizedKeyword)) - Number(leftName.startsWith(normalizedKeyword));
+      });
+      database.saveDestinationResponses(parsed.data.keyword, uniqueDestinations);
+      return res.json(ok(uniqueDestinations));
     } catch (error) {
       next(error);
       return;
     }
   }
   const mockDestinations = [
-    { name: "London", detail: "United Kingdom · England", destinationId: "GB-LON", cityCode: "LON" },
-    { name: "London", detail: "Canada · Ontario", destinationId: "CA-YXU", cityCode: "YXU" },
-    { name: "London", detail: "United States of America · Ohio", destinationId: "US-OH-LONDON", cityCode: "US-OH-LONDON" },
-    { name: "New London", detail: "United States of America · Minnesota", destinationId: "US-MN-NEW-LONDON", cityCode: "US-MN-NEW-LONDON" },
-    { name: "New London", detail: "United States of America · North Carolina", destinationId: "US-NC-NEW-LONDON", cityCode: "US-NC-NEW-LONDON" },
-    { name: "East London", detail: "South Africa · Eastern Cape", destinationId: "ZA-ELS", cityCode: "ELS" },
-    { name: "Little London", detail: "Jamaica · Westmoreland", destinationId: "JM-LITTLE-LONDON", cityCode: "JM-LITTLE-LONDON" },
-    { name: "London Colney", detail: "England · St Albans", destinationId: "GB-LONDON-COLNEY", cityCode: "GB-LONDON-COLNEY" },
-    { name: "Shanghai", detail: "China · Business & Leisure", destinationId: "SHA", cityCode: "SHA" },
-    { name: "Hong Kong", detail: "Hong Kong, China · Harbor City", destinationId: "HKG", cityCode: "HKG" },
-    { name: "Beijing", detail: "China · Historic Capital", destinationId: "BJS", cityCode: "BJS" },
-    { name: "Shenzhen", detail: "China · Greater Bay Area", destinationId: "SZX", cityCode: "SZX" },
-    { name: "Bangkok", detail: "Thailand · Popular International Destination", destinationId: "BKK", cityCode: "BKK" },
+    { name: "London", detail: "United Kingdom · England", cityCode: "LON", destinationType: 8, latGoogle: 51.50746, lngGoogle: -0.127673 },
+    { name: "London", detail: "Canada · Ontario", cityCode: "YXU", destinationType: 8, latGoogle: 42.98695, lngGoogle: -81.243179 },
+    { name: "London", detail: "United States of America · Ohio", cityCode: "US-OH-LONDON", destinationType: 8, latGoogle: 39.886448, lngGoogle: -83.44825 },
+    { name: "New London", detail: "United States of America · Minnesota", cityCode: "US-MN-NEW-LONDON", destinationType: 8, latGoogle: 45.301075, lngGoogle: -94.944176 },
+    { name: "New London", detail: "United States of America · North Carolina", cityCode: "US-NC-NEW-LONDON", destinationType: 8, latGoogle: 35.443195, lngGoogle: -80.219223 },
+    { name: "East London", detail: "South Africa · Eastern Cape", cityCode: "ELS", destinationType: 8, latGoogle: -33.014809, lngGoogle: 27.903751 },
+    { name: "Little London", detail: "Jamaica · Westmoreland", cityCode: "JM-LITTLE-LONDON", destinationType: 8, latGoogle: 18.245424, lngGoogle: -78.214654 },
+    { name: "London Colney", detail: "England · St Albans", cityCode: "GB-LONDON-COLNEY", destinationType: 8, latGoogle: 51.721911, lngGoogle: -0.297422 },
+    { name: "Shanghai", detail: "China · Business & Leisure", cityCode: "SHA", destinationType: 8, latGoogle: 31.2304, lngGoogle: 121.4737 },
+    { name: "Hong Kong", detail: "Hong Kong, China · Harbor City", cityCode: "HKG", destinationType: 8, latGoogle: 22.3193, lngGoogle: 114.1694 },
+    { name: "Beijing", detail: "China · Historic Capital", cityCode: "BJS", destinationType: 8, latGoogle: 39.9042, lngGoogle: 116.4074 },
+    { name: "Shenzhen", detail: "China · Greater Bay Area", cityCode: "SZX", destinationType: 8, latGoogle: 22.5431, lngGoogle: 114.0579 },
+    { name: "深圳北站", detail: "中国 · 广东", cityCode: "SZX", destinationType: 8, latGoogle: 22.610332, lngGoogle: 114.030227 },
+    { name: "Bangkok", detail: "Thailand · Popular International Destination", cityCode: "BKK", destinationType: 8, latGoogle: 13.7563, lngGoogle: 100.5018 },
   ];
   const normalized = parsed.data.keyword.trim().toLowerCase();
   const filtered = mockDestinations.filter(d => `${d.name}${d.detail}`.toLowerCase().includes(normalized));
@@ -794,6 +823,29 @@ app.post("/api/hotels/by-id", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+app.post("/api/hotels/detail", async (req, res) => {
+  const parsed = z.object({ hotelId: z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Missing supplier hotel ID" });
+  const hotelId = Number(parsed.data.hotelId);
+  if (useLocalHotelSimulation) {
+    const hotel = database.listHotels().find(item => Number(item.hotelId) === hotelId) || database.listHotels()[0];
+    if (!hotel) return res.status(404).json({ code: "HOTEL_NOT_FOUND", message: "Hotel not found" });
+    const detail: HotelBasicInfo = {
+      hotelId: hotel.hotelId || hotel.id,
+      name: hotel.name,
+      city: hotel.city,
+      district: hotel.district,
+      ...(hotel.stars !== undefined ? { stars: hotel.stars } : {}),
+      ...(hotel.rating !== undefined ? { rating: hotel.rating } : {}),
+      facilities: hotel.tags,
+      images: hotel.image ? [hotel.image] : [],
+      importantNotices: [],
+    };
+    return res.json(ok(detail));
+  }
+  return res.json(ok(await queryGlinkHotelBasicInfo(runtime.glink, hotelId)));
 });
 
 app.post("/api/hotels/filters", async (req, res) => {

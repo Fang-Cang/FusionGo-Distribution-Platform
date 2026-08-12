@@ -11,6 +11,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleHelp,
   Clock3,
@@ -19,6 +20,7 @@ import {
   EyeOff,
   FileText,
   Globe2,
+  Gift,
   Heart,
   ImageOff,
   Landmark,
@@ -62,6 +64,7 @@ import type {
   FlightOffer,
   FavoriteHotel,
   HotelOffer,
+  HotelBasicInfo,
   NationalityCatalog,
   NationalityOption,
   OrderBookingDetails,
@@ -1068,9 +1071,18 @@ function HotelCheckout({ offer, onBack, onComplete }: { offer: HotelOffer; onBac
   </section>;
 }
 
-function HotelDetail({ offers, onBack, onCheckout, favorite, favoriteBusy, onToggleFavorite, authenticated, onLoginRequired }: { offers: HotelOffer[]; onBack: () => void; onCheckout: (offer: HotelOffer, availability: Partial<HotelOffer> & { price: number; currency: string }) => void; favorite: boolean; favoriteBusy: boolean; onToggleFavorite: () => void; authenticated: boolean; onLoginRequired: () => void }) {
+function HotelDetail({ offers, hotelDetail, onBack, onCheckout, favorite, favoriteBusy, onToggleFavorite, authenticated, onLoginRequired }: { offers: HotelOffer[]; hotelDetail?: HotelBasicInfo; onBack: () => void; onCheckout: (offer: HotelOffer, availability: Partial<HotelOffer> & { price: number; currency: string }) => void; favorite: boolean; favoriteBusy: boolean; onToggleFavorite: () => void; authenticated: boolean; onLoginRequired: () => void }) {
   const { money } = useDisplayMoney();
   const offer = offers[0];
+  const detailImages = hotelDetail?.images.length ? hotelDetail.images : offer.image ? [offer.image] : [];
+  const roomGroups = useMemo(() => {
+    const groups = new Map<string, HotelOffer[]>();
+    offers.forEach(item => {
+      const key = item.roomId === undefined || item.roomId === null || item.roomId === "" ? `offer:${item.id}` : `room:${item.roomId}`;
+      groups.set(key, [...(groups.get(key) || []), item]);
+    });
+    return [...groups.entries()].map(([key, products]) => ({ key, room: products[0], products }));
+  }, [offers]);
   const [checkingId, setCheckingId] = useState("");
   const [error, setError] = useState("");
   const check = async (selected: HotelOffer) => {
@@ -1085,17 +1097,111 @@ function HotelDetail({ offers, onBack, onCheckout, favorite, favoriteBusy, onTog
     <button className="back-link" onClick={onBack}><ArrowLeft size={17} />Back to Results</button>
     <BookingProgress current={2} labels={["Search", "Results", "Hotel Detail", "Checkout", "Confirmation", "Order Detail"]} />
     <SimulationNotice offer={offer} />
-    <div className="hotel-gallery">{offer.image ? <img className="gallery-main" src={offer.image} alt={`${offer.name} Exterior`} /> : <div className="gallery-main gallery-unavailable"><Building2 size={38} /><span>G-Link did not provide hotel images</span></div>}<div className="gallery-unavailable"><ImageOff size={25} /><span>No more supplier images</span></div><div className="gallery-unavailable"><ImageOff size={25} /><span>No more supplier images</span></div></div>
-    <div className={`hotel-detail-layout ${offer.rating === undefined ? "without-rating" : ""}`}><div>{offer.stars !== undefined && <p className="stars">{"★".repeat(offer.stars)}</p>}<div className="hotel-detail-title"><h1>{offer.name}</h1><button className={`favorite-button detail ${favorite ? "active" : ""}`} onClick={onToggleFavorite} disabled={favoriteBusy} aria-pressed={favorite} aria-label={favorite ? "Remove from Favorites" : "Add to Favorites"}><Heart size={18} fill={favorite ? "currentColor" : "none"} />{favorite ? "Favorited" : "Add to Favorites"}</button></div>{offer.district && <p className="detail-location"><MapPin size={16} />{offer.district}</p>}
-      {!!offer.tags.length && <div className="amenity-strip">{offer.tags.map(item => <span key={item}><Check size={14} />{item}</span>)}</div>}
-      <div className="rate-filter-bar glass glass-light"><strong>G-Link Real-time Available Products</strong><span>{offers.length} room types / rate plans</span><span className="upstream-only-badge">Showing API returned data only</span></div>
-      <div className="room-offer-list">{offers.map((roomOffer, index) => <section className="room-offer glass glass-light" key={roomOffer.id}><div className="room-photo">{roomOffer.image ? <img src={roomOffer.image} alt="" /> : <div className="hotel-image-placeholder"><Building2 size={25} /><span>No room image from supplier</span></div>}</div><div className="room-copy"><p className="eyebrow">LIVE RATE · {index + 1}</p><div className="room-title-line"><h2>{roomOffer.roomName}</h2>{roomOffer.nonRefundable && <span className="non-refundable-badge">Non-refundable</span>}{roomOffer.payAtHotel && <span className="pay-at-hotel-badge">Pay at Hotel</span>}</div>{roomOffer.ratePlanName && <strong className="rate-plan-name">{roomOffer.ratePlanName}</strong>}<span>{roomOffer.roomNum || 1} rooms · {roomOffer.numberOfAdults || 2} adults · {roomOffer.nights || 1} nights{roomOffer.maxRoomCount ? ` · Max bookable ${roomOffer.maxRoomCount} rooms` : ""}</span><ul><li><BedDouble size={15} />{roomOffer.bedTypeDescription || "Supplier did not return bed type"}</li><li><Check size={15} />{roomOffer.breakfast}</li><li><ShieldCheck size={15} />{roomOffer.cancelPolicy}</li></ul><HotelComplianceFacts offer={roomOffer} compact /></div><div className="room-price"><small>Per room per night, tax included</small><strong>{money(roomOffer.nightlyPrice, roomOffer.currency)}</strong><span>{roomOffer.nights || 1} nights × {roomOffer.roomNum || 1} rooms, total {money(roomOffer.totalPrice ?? roomOffer.nightlyPrice * (roomOffer.nights || 1) * (roomOffer.roomNum || 1), roomOffer.currency)}</span><button className="primary" onClick={() => void check(roomOffer)} disabled={Boolean(checkingId)}>{checkingId === roomOffer.id ? <><LoaderCircle className="spinner" size={17} />Checking availability</> : authenticated ? "Book This Product" : "Sign in to Book"}</button></div></section>)}</div>{error && <p className="error-copy room-error" role="alert">{error}</p>}
-    </div>{offer.rating !== undefined && <aside className="detail-rating glass glass-light"><strong>{offer.rating}</strong><span>Supplier Rating</span>{offer.ratingSource && <small>Rating source: {offer.ratingSource}</small>}</aside>}</div>
+    <header className="accomy-hotel-head">
+      <div><p className="eyebrow">HOTEL INFORMATION</p>{(hotelDetail?.stars ?? offer.stars) !== undefined && <p className="stars">{"★".repeat(hotelDetail?.stars ?? offer.stars ?? 0)}</p>}<h1>{hotelDetail?.name || offer.name}</h1><p><MapPin size={16} />{hotelDetail?.address || hotelDetail?.district || offer.district || hotelDetail?.city || offer.city}</p></div>
+      <div className="hotel-head-actions"><button className={`favorite-button detail ${favorite ? "active" : ""}`} onClick={onToggleFavorite} disabled={favoriteBusy} aria-pressed={favorite}><Heart size={18} fill={favorite ? "currentColor" : "none"} />{favorite ? "Favorited" : "Save"}</button>{(hotelDetail?.rating ?? offer.rating) !== undefined && <span className="accomy-rating"><strong>{hotelDetail?.rating ?? offer.rating}</strong><small>{hotelDetail?.ratingSource || offer.ratingSource || "Supplier rating"}</small></span>}<a className="primary select-room-button" href="#choose-room">Select Room</a></div>
+    </header>
+    <div className="hotel-gallery accomy-gallery">{[0, 1, 2, 3, 4].map(index => detailImages[index] ? <img className={index === 0 ? "gallery-main" : ""} src={detailImages[index]} alt={index === 0 ? `${hotelDetail?.name || offer.name} Exterior` : ""} key={detailImages[index]} /> : <div className={`${index === 0 ? "gallery-main " : ""}gallery-unavailable`} key={index}><ImageOff size={25} /><span>No supplier image</span></div>)}{detailImages.length > 0 && <span className="gallery-count"><ImageOff size={15} />{detailImages.length} Photos</span>}</div>
+    <section className="hotel-overview-grid">
+      <div className="overview-card glass glass-light"><div className="overview-title"><span><CheckCircle2 size={20} /></span><div><p className="eyebrow">AMENITIES</p><h2>Hotel Facilities</h2></div></div><div className="overview-amenities">{(hotelDetail?.facilities.length ? hotelDetail.facilities : offer.tags).slice(0, 8).map(item => <span key={item}><Check size={14} />{item}</span>)}</div><a href="#facilities">See All <ArrowRight size={14} /></a></div>
+      <div className="overview-card location-card glass glass-light"><div className="location-marker"><MapPin size={24} /></div><div><p className="eyebrow">LOCATION</p><h2>{hotelDetail?.district || offer.district || hotelDetail?.city || offer.city}</h2><p>{hotelDetail?.address || "Supplier did not provide a detailed address"}</p></div></div>
+    </section>
+    <nav className="hotel-section-tabs glass glass-light" aria-label="Hotel detail sections"><a href="#choose-room">Choose Room</a><a href="#facilities">Facilities</a><a href="#about">About</a></nav>
+    <section className="stay-query-bar glass glass-light" id="choose-room"><div><CalendarDays size={20} /><span><small>Check-in</small><strong>{stayDateLabel(offer.checkInDate)}</strong></span></div><div><CalendarDays size={20} /><span><small>Check-out</small><strong>{stayDateLabel(offer.checkOutDate)}</strong></span></div><div><Users size={20} /><span><small>Rooms & Guests</small><strong>{offer.roomNum || 1} room · {offer.numberOfAdults || 2} adults{offer.numberOfChildren ? ` · ${offer.numberOfChildren} children` : ""}</strong></span></div><button className="secondary" onClick={onBack}>Update Search</button></section>
+    <div className="hotel-detail-layout without-rating"><div>
+      <div className="rate-filter-bar glass glass-light"><strong>G-Link Real-time Available Products</strong><span>{roomGroups.length} room types · {offers.length} rate plans</span><span className="upstream-only-badge">Showing API returned data only</span></div>
+      <div className="room-offer-list">{roomGroups.map((group, groupIndex) => {
+        const roomOffer = group.room;
+        const roomCount = roomOffer.roomNum || 1;
+        const nights = roomOffer.nights || 1;
+        return <section className="room-offer glass glass-light" key={group.key}>
+          <div className="room-summary">
+            <div className="room-photo">{roomOffer.image ? <img src={roomOffer.image} alt={roomOffer.roomName} /> : <div className="hotel-image-placeholder"><Building2 size={25} /><span>No room image from supplier</span></div>}<span className="room-photo-index">{String(groupIndex + 1).padStart(2, "0")}</span></div>
+            <h2>{roomOffer.roomName}</h2>
+            <ul><li><BedDouble size={16} />{roomOffer.bedTypeDescription || "Bed type subject to supplier confirmation"}</li><li><Users size={16} />{roomOffer.numberOfAdults || 2} adults · {roomCount} room{roomCount > 1 ? "s" : ""}</li><li><CalendarDays size={16} />{nights} night{nights > 1 ? "s" : ""}{roomOffer.maxRoomCount ? ` · Up to ${roomOffer.maxRoomCount} rooms` : ""}</li></ul>
+          </div>
+          <div className="room-products">{group.products.map((product, productIndex) => {
+            const productRoomCount = product.roomNum || 1;
+            const productNights = product.nights || 1;
+            const total = product.totalPrice ?? product.nightlyPrice * productNights * productRoomCount;
+            const rateTitle = product.ratePlanName || `${product.breakfast}${product.nonRefundable ? "" : " · Flexible cancellation"}`;
+            return <article className="room-rate-row" key={product.id}>
+              <div className="room-product">
+                <p className="eyebrow">LIVE RATE · {productIndex + 1}</p>
+                <h3>{rateTitle}</h3>
+                <div className="product-benefits">
+                  <span><CheckCircle2 size={18} />{product.breakfast}</span>
+                  <span><Gift size={18} />Package benefits included</span>
+                  <span>{product.payAtHotel ? <Building2 size={18} /> : <CreditCard size={18} />}{product.payAtHotel ? "Pay at hotel" : product.paymentTiming || "Prepay online"}</span>
+                  <span className={product.nonRefundable ? "is-restricted" : "is-flexible"}>{product.nonRefundable ? <X size={18} /> : <ShieldCheck size={18} />}{product.cancelPolicy || (product.nonRefundable ? "Non-refundable" : "Free cancellation")}</span>
+                </div>
+              </div>
+              <div className="room-price">
+                <small>Per room per night, tax included</small>
+                <strong>{money(product.nightlyPrice, product.currency)}</strong>
+                <span className="room-total">Total price: <b>{money(total, product.currency)}</b></span>
+                {product.priceBreakdown?.chargesDueAtProperty ? <span>Pay at property: {money(product.priceBreakdown.chargesDueAtProperty, product.priceBreakdown.chargesDueAtPropertyCurrency || product.currency)}</span> : <span>Taxes & fees included</span>}
+                <button className="primary" onClick={() => void check(product)} disabled={Boolean(checkingId)}>{checkingId === product.id ? <><LoaderCircle className="spinner" size={17} />Checking availability</> : authenticated ? <>Reserve <ArrowRight size={17} /></> : "Sign in to Book"}</button>
+              </div>
+            </article>;
+          })}</div>
+        </section>;
+      })}</div>{error && <p className="error-copy room-error" role="alert">{error}</p>}
+    </div></div>
+    <section className="accomy-info-section" id="facilities"><div className="section-heading"><p className="eyebrow">FACILITIES</p><h2>Hotel Facilities</h2></div><div className="facility-grid glass glass-light">{(hotelDetail?.facilities.length ? hotelDetail.facilities : offer.tags).map(item => <span key={item}><CheckCircle2 size={16} />{item}</span>)}</div></section>
+    <section className="accomy-info-section" id="about"><div className="section-heading"><p className="eyebrow">ABOUT</p><h2>Hotel Information</h2></div><div className="about-hotel-grid">
+      <div className="about-facts glass glass-light"><div><small>Check-in</small><strong>{[hotelDetail?.checkInTime, hotelDetail?.checkInLateTime].filter(Boolean).join(" – ") || "Supplier did not provide"}</strong></div><div><small>Check-out</small><strong>{hotelDetail?.checkOutTime || "Supplier did not provide"}</strong></div>{hotelDetail?.phone && <div><small>Hotel Phone</small><strong>{hotelDetail.phone}</strong></div>}<div><small>Hotel Address</small><strong>{hotelDetail?.address || hotelDetail?.district || offer.district || "Supplier did not provide"}</strong></div></div>
+      <div className="about-description glass glass-light"><h3>Hotel Description</h3><p>{hotelDetail?.introduction || "Supplier did not provide a hotel description."}</p>{hotelDetail?.importantNotices.map(notice => <div className="hotel-important-notice" key={notice}><CircleHelp size={15} /><span>{notice}</span></div>)}</div>
+    </div></section>
   </section>;
 }
 
+function HotelCalendar({ locale, checkIn, checkOut, selecting, min, onSelect, onClose }: { locale: LocaleCode; checkIn: string; checkOut: string; selecting: "checkIn" | "checkOut"; min: string; onSelect: (value: string) => void; onClose: () => void }) {
+  const initialDate = new Date(`${selecting === "checkOut" ? checkOut : checkIn || min}T00:00:00`);
+  const [viewMonth, setViewMonth] = useState(() => new Date(initialDate.getFullYear(), initialDate.getMonth(), 1));
+  const intlLocale = locale === "en" ? "en-US" : locale;
+  const weekdays = Array.from({ length: 7 }, (_, index) => new Intl.DateTimeFormat(intlLocale, { weekday: "short" })
+    .format(new Date(2026, 7, 9 + index)));
+  const today = localDateValue(new Date());
+  const moveMonth = (offset: number) => setViewMonth(current => new Date(current.getFullYear(), current.getMonth() + offset, 1));
+  const renderMonth = (month: Date) => {
+    const firstCell = new Date(month.getFullYear(), month.getMonth(), 1 - month.getDay());
+    const days = Array.from({ length: 42 }, (_, index) => {
+      const date = new Date(firstCell);
+      date.setDate(firstCell.getDate() + index);
+      return date;
+    });
+    return <section className="calendar-month"><h3>{new Intl.DateTimeFormat(intlLocale, { year: "numeric", month: "long" }).format(month)}</h3><div className="calendar-weekdays" aria-hidden="true">{weekdays.map(day => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{days.map(date => {
+      const iso = localDateValue(date);
+      const outside = date.getMonth() !== month.getMonth();
+      const disabled = iso < min || (selecting === "checkOut" && iso <= checkIn);
+      const rangeStart = iso === checkIn;
+      const rangeEnd = iso === checkOut;
+      const inRange = iso > checkIn && iso < checkOut;
+      return <button type="button" key={iso} className={`${outside ? "outside" : ""} ${rangeStart ? "range-start" : ""} ${rangeEnd ? "range-end" : ""} ${inRange ? "in-range" : ""} ${iso === today ? "today" : ""}`} disabled={disabled || outside} aria-pressed={rangeStart || rangeEnd} aria-label={new Intl.DateTimeFormat(intlLocale, { dateStyle: "full" }).format(date)} onClick={() => onSelect(iso)}>{outside ? "" : date.getDate()}</button>;
+    })}</div></section>;
+  };
+  const nextMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 1);
+  return <div className="light-popover calendar-popover glass glass-light" role="dialog" aria-modal="false" aria-label={locale === "en" ? "Choose date" : locale === "zh-TW" ? "選擇日期" : "选择日期"} onKeyDown={event => { if (event.key === "Escape") onClose(); }}>
+    <button className="calendar-nav previous" type="button" onClick={() => moveMonth(-1)} aria-label={locale === "en" ? "Previous month" : "上个月"}><ChevronLeft size={19} /></button><button className="calendar-nav next" type="button" onClick={() => moveMonth(1)} aria-label={locale === "en" ? "Next month" : "下个月"}><ChevronRight size={19} /></button>
+    <div className="calendar-months">{renderMonth(viewMonth)}{renderMonth(nextMonth)}</div>
+    <div className="calendar-footer"><span>{selecting === "checkIn" ? locale === "en" ? "Select check-in date" : "请选择入住日期" : locale === "en" ? "Select check-out date" : "请选择退房日期"}</span><button type="button" onClick={onClose}>{locale === "en" ? "Close" : locale === "zh-TW" ? "關閉" : "关闭"}</button></div>
+  </div>;
+}
+
 function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: LocaleCode; authenticated: boolean; onLoginRequired: () => void }) {
+  type DestinationSuggestion = { name: string; detail: string; cityCode: string; destinationId?: string; destinationType: number; source?: number; hotelId?: number; latGoogle: number; lngGoogle: number };
+  type RecentHotelSearch = DestinationSuggestion & { checkIn: string; checkOut: string; rooms: number; adults: number; searchedAt: string };
   const english = locale === "en";
+  const hotelTr = (zh: string, en: string, zhTw = zh) => locale === "en" ? en : locale === "zh-TW" ? zhTw : zh;
+  const recentDateFormatter = useMemo(() => new Intl.DateTimeFormat(
+    locale === "en" ? "en-US" : locale,
+    { month: "short", day: "numeric", weekday: "short", timeZone: "UTC" },
+  ), [locale]);
+  const recentDateLabel = (value: string) => recentDateFormatter.format(new Date(`${value}T00:00:00Z`));
+  const recentOccupancyLabel = (rooms: number, adults: number) => locale === "en"
+    ? `${rooms} room${rooms === 1 ? "" : "s"}, ${adults} adult${adults === 1 ? "" : "s"}`
+    : locale === "zh-TW" ? `${rooms} 間客房，${adults} 位成人` : `${rooms} 间客房，${adults} 位成人`;
   const { displayCurrency, convert, money } = useDisplayMoney();
   const budget = useMemo(() => ({
     CNY: { min: 300, max: 3000, step: 100, shortcuts: [800, 1200, 2000, 3000] },
@@ -1124,6 +1230,17 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
   const [hasSearched, setHasSearched] = useState(false);
   const [error, setError] = useState("");
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState<"checkIn" | "checkOut">();
+  const [destinationLoading, setDestinationLoading] = useState(false);
+  const [selectedDestination, setSelectedDestination] = useState<DestinationSuggestion>();
+  const [recentSearches, setRecentSearches] = useState<RecentHotelSearch[]>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem("fusiongo.recentHotelSearches") || "[]");
+      return Array.isArray(stored) ? stored.slice(0, 3) : [];
+    } catch {
+      return [];
+    }
+  });
   const [occupancyOpen, setOccupancyOpen] = useState(false);
   const [rooms, setRooms] = useState(1);
   const [adults, setAdults] = useState(2);
@@ -1144,6 +1261,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
   const [selection, setSelection] = useState<HotelOffer>();
   const [roomOffers, setRoomOffers] = useState<HotelOffer[]>([]);
   const [selectedListing, setSelectedListing] = useState<HotelOffer>();
+  const [hotelDetail, setHotelDetail] = useState<HotelBasicInfo>();
   const [hydratingId, setHydratingId] = useState("");
   const [favoriteHotels, setFavoriteHotels] = useState<FavoriteHotel[]>([]);
   const [favoritesLoading, setFavoritesLoading] = useState(false);
@@ -1160,19 +1278,48 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     setDestination(current => names[current] || current);
     setLastSearch(current => names[current] || current);
   }, [english]);
-  const [destinationSuggestions, setDestinationSuggestions] = useState<Array<{ name: string; detail: string; destinationId: string; cityCode: string }>>([]);
+  const [destinationSuggestions, setDestinationSuggestions] = useState<DestinationSuggestion[]>([]);
   useEffect(() => {
     const keyword = destination.trim();
-    if (keyword.length < 2) { setDestinationSuggestions([]); return; }
+    if (keyword.length < 2) {
+      setDestinationSuggestions([]);
+      setDestinationLoading(false);
+      return;
+    }
+    let active = true;
     const controller = new AbortController();
+    setDestinationSuggestions([]);
+    setDestinationLoading(true);
     const timer = setTimeout(() => {
       api.getDestination(keyword, controller.signal)
-        .then(items => { if (!controller.signal.aborted) setDestinationSuggestions(items.slice(0, 8)); })
-        .catch(() => undefined);
+        .then(items => { if (active) setDestinationSuggestions(items.slice(0, 8)); })
+        .catch(() => undefined)
+        .finally(() => { if (active) setDestinationLoading(false); });
     }, 300);
-    return () => { controller.abort(); clearTimeout(timer); };
+    return () => { active = false; controller.abort(); clearTimeout(timer); };
   }, [destination]);
   const suggestions = destinationSuggestions;
+  const popularDestinations = ["Shanghai", "Guangzhou", "Beijing", "Bangkok", "Tokyo", "Hong Kong", "Seoul", "Shenzhen", "Singapore", "Kuala Lumpur", "London", "New York"];
+  const chooseDestination = (item: DestinationSuggestion) => {
+    setDestination(item.name);
+    setSelectedDestination(item);
+    setSuggestionsOpen(false);
+  };
+  const choosePopularDestination = (name: string) => {
+    setDestination(name);
+    setSelectedDestination(undefined);
+    setSuggestionsOpen(true);
+    setError("");
+  };
+  const chooseRecentSearch = (item: RecentHotelSearch) => {
+    setDestination(item.name);
+    setSelectedDestination(item);
+    setCheckIn(item.checkIn);
+    setCheckOut(item.checkOut);
+    setRooms(item.rooms);
+    setAdults(item.adults);
+    setSuggestionsOpen(false);
+  };
   const districtOptions = useMemo(() => Array.from(new Set(items.map(hotel => hotel.district).filter(Boolean)))
     .map(district => ({ district, count: items.filter(hotel => hotel.district === district).length })), [items]);
   const amenityOptions = useMemo(() => {
@@ -1269,8 +1416,10 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     setFreeCancellationOnly(false);
     setBedType("");
   };
-  const search = async (destinationOverride?: string) => {
+  const search = async (destinationOverride?: string, destinationOverrideSelection?: DestinationSuggestion) => {
     const cleanDestination = (destinationOverride ?? destination).trim();
+    const resolvedDestination = destinationOverrideSelection
+      ?? (!destinationOverride && selectedDestination?.name === cleanDestination ? selectedDestination : undefined);
     if (!cleanDestination) {
       setError(english ? "Enter city, landmark, or hotel name" : "Enter city, landmark, or hotel name");
       return;
@@ -1295,32 +1444,39 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     setHasSearched(true);
     try {
       const nextItems = await api.searchHotels(
-        { destination: cleanDestination, checkIn, checkOut, rooms, adults, children, childAges },
+        {
+          destination: cleanDestination,
+          cityCode: resolvedDestination?.cityCode || undefined,
+          destinationId: resolvedDestination?.destinationId,
+          destinationType: resolvedDestination?.destinationType,
+          source: resolvedDestination?.source,
+          hotelId: resolvedDestination?.hotelId,
+          latGoogle: resolvedDestination?.latGoogle,
+          lngGoogle: resolvedDestination?.lngGoogle,
+          language: english ? "en-US" : "zh-CN",
+          checkIn, checkOut, rooms, adults, children, childAges,
+        },
         abortController.signal,
       );
       if (searchSequence !== searchSequenceRef.current) return;
-      const destinationCodes: Record<string, string> = {
-        shanghai: "SHA",
-        shenzhen: "SZX",
-        "hong kong": "HKG",
-        beijing: "BJS",
-        singapore: "SIN",
-        bangkok: "BKK",
-      };
-      const destinationAliases: Record<string, string[]> = {
-        SHA: ["shanghai"], SZX: ["shenzhen"],
-        HKG: ["hong kong"], BJS: ["beijing"],
-        SIN: ["singapore"], BKK: ["bangkok"],
-      };
-      const expectedCode = destinationCodes[cleanDestination.toLowerCase()];
-      const mismatched = expectedCode && nextItems.some(hotel => {
-        if (hotel.cityCode) return hotel.cityCode.toUpperCase() !== expectedCode;
-        return !destinationAliases[expectedCode].includes(hotel.city.trim().toLowerCase());
-      });
-      if (mismatched) {
-        throw new Error(english
-          ? "Supplier hotel results do not match the search destination. Please search again."
-          : "Supplier hotel results do not match the search destination. Please search again.");
+      if (resolvedDestination) {
+        const recent: RecentHotelSearch = {
+          ...resolvedDestination,
+          checkIn,
+          checkOut,
+          rooms,
+          adults,
+          searchedAt: new Date().toISOString(),
+        };
+        setRecentSearches(current => {
+          const next = [recent, ...current.filter(item => !(
+            item.name === recent.name
+            && item.latGoogle === recent.latGoogle
+            && item.lngGoogle === recent.lngGoogle
+          ))].slice(0, 3);
+          window.localStorage.setItem("fusiongo.recentHotelSearches", JSON.stringify(next));
+          return next;
+        });
       }
       setLastSearch(cleanDestination);
       setItems(nextItems);
@@ -1337,9 +1493,13 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     setSuggestionsOpen(false);
     setError("");
     try {
-      const products = await api.getHotelProducts(hotel.id);
+      const [products, detail] = await Promise.all([
+        api.getHotelProducts(hotel.id),
+        hotel.hotelId ? api.getHotelDetail(hotel.hotelId) : Promise.resolve(undefined),
+      ]);
       if (!products.length) throw new Error(english ? "Supplier did not return real-time available products" : "Supplier did not return real-time available products");
       setSelectedListing(hotel);
+      setHotelDetail(detail);
       setRoomOffers(products);
       setSelection(products[0]);
       setStage("detail");
@@ -1361,13 +1521,16 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
   };
   useEffect(() => { window.scrollTo({ top: 0, behavior: "auto" }); }, [stage]);
   const searchForm = <form className="search-card glass glass-dark" aria-label={english ? "Hotel Search" : "Hotel Search"} noValidate onSubmit={event => { event.preventDefault(); void search(); }}>
-    <label className="search-field field-destination"><span>{english ? "Destination / Hotel" : "Destination / Hotel"}</span><div><MapPin size={18} /><input aria-label={english ? "Destination or hotel" : "Destination or hotel"} autoComplete="off" value={destination} onFocus={() => setSuggestionsOpen(true)} onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)} onChange={e => { setDestination(e.target.value); setSuggestionsOpen(true); setError(""); }} onKeyDown={event => { if (event.key === "Escape") setSuggestionsOpen(false); if (event.key === "Enter") { event.preventDefault(); void search(); } }} /></div>
-      {suggestionsOpen && <div className="light-popover glass glass-light" role="listbox" aria-label={english ? "Destination suggestions" : "Destination suggestions"}>
-        {suggestions.length ? suggestions.map((item, index) => <button type="button" key={item.destinationId || `${item.name}-${item.detail}`} role="option" aria-selected={index === 0} onMouseDown={event => { event.preventDefault(); setDestination(item.name); setSuggestionsOpen(false); }}><MapPin size={16} /><span><strong>{item.name}</strong><small>{item.detail}</small></span></button>) : <p className="suggestion-empty">{english ? `Press Enter to search "${destination.trim()}"` : `Press Enter to search "${destination.trim()}"`}</p>}
+    <label className="search-field field-destination"><span>{english ? "Destination / Hotel" : "Destination / Hotel"}</span><div><MapPin size={18} /><input aria-label={english ? "Destination or hotel" : "Destination or hotel"} autoComplete="off" value={destination} onFocus={() => setSuggestionsOpen(true)} onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)} onChange={e => { setDestination(e.target.value); setSelectedDestination(undefined); setSuggestionsOpen(true); setError(""); }} onKeyDown={event => { if (event.key === "Escape") setSuggestionsOpen(false); if (event.key === "Enter") { event.preventDefault(); void search(); } }} /></div>
+      {suggestionsOpen && <div className="light-popover glass glass-light" role="listbox" aria-label={english ? "Destination suggestions" : "Destination suggestions"} aria-busy={destinationLoading}>
+        {!destination.trim() ? <div className="destination-default-panel">
+          {recentSearches.length > 0 && <section className="recent-destinations"><h3>{hotelTr("最近搜索", "Recent searches", "近期搜尋")}</h3>{recentSearches.map(item => <button type="button" key={`${item.name}-${item.latGoogle}-${item.lngGoogle}`} onMouseDown={event => { event.preventDefault(); chooseRecentSearch(item); }}><Clock3 size={17} /><strong>{item.name}</strong><span>{recentDateLabel(item.checkIn)} – {recentDateLabel(item.checkOut)} <i /> {recentOccupancyLabel(item.rooms, item.adults)}</span></button>)}</section>}
+          <section className="popular-destinations"><h3>{english ? "Popular Destinations" : "热门目的地"}</h3><div>{popularDestinations.map(name => <button type="button" key={name} onMouseDown={event => { event.preventDefault(); choosePopularDestination(name); }}>{name}</button>)}</div></section>
+        </div> : destinationLoading ? <div className="destination-loading" role="status" aria-live="polite"><LoaderCircle className="spinner" size={19} /><span><strong>{english ? "Finding destinations" : "正在查找目的地"}</strong><small>{english ? "Loading matching cities and hotels…" : "正在加载匹配的城市与酒店…"}</small></span></div> : suggestions.length ? suggestions.map((item, index) => <button type="button" key={`${item.name}-${item.latGoogle}-${item.lngGoogle}`} role="option" aria-selected={index === 0} onMouseDown={event => { event.preventDefault(); chooseDestination(item); }}><MapPin size={16} /><span><strong>{item.name}</strong><small>{item.detail}</small></span></button>) : <p className="suggestion-empty">{english ? `Press Enter to search "${destination.trim()}"` : `Press Enter to search "${destination.trim()}"`}</p>}
       </div>}
     </label>
-    <label className="search-field"><span>{english ? "Check-in Date" : "Check-in Date"}</span><div><CalendarDays size={18} /><input aria-label={english ? "Check-in Date" : "Check-in Date"} type="date" min={localDateValue(new Date())} value={checkIn} onChange={e => { const next = e.target.value; setCheckIn(next); setError(""); if (checkOut && checkOut <= next) { const following = new Date(`${next}T00:00:00`); following.setDate(following.getDate() + 1); setCheckOut(localDateValue(following)); } }} /></div></label>
-    <label className="search-field"><span>{english ? "Check-out Date" : "Check-out Date"}</span><div><CalendarDays size={18} /><input aria-label={english ? "Check-out Date" : "Check-out Date"} type="date" min={checkIn} value={checkOut} onChange={e => { setCheckOut(e.target.value); setError(""); }} /></div></label>
+    <div className="search-field date-field"><span>{english ? "Check-in Date" : "Check-in Date"}</span><button type="button" className="field-button date-trigger" onClick={() => { setCalendarOpen(current => current === "checkIn" ? undefined : "checkIn"); setSuggestionsOpen(false); setOccupancyOpen(false); }} aria-expanded={Boolean(calendarOpen)}><CalendarDays size={18} /><b>{checkIn.replaceAll("-", "/")}</b><ChevronDown size={15} /></button>{calendarOpen && <HotelCalendar locale={locale} checkIn={checkIn} checkOut={checkOut} selecting={calendarOpen} min={localDateValue(new Date())} onClose={() => setCalendarOpen(undefined)} onSelect={next => { setError(""); if (calendarOpen === "checkIn") { setCheckIn(next); if (checkOut <= next) { const following = new Date(`${next}T00:00:00`); following.setDate(following.getDate() + 1); setCheckOut(localDateValue(following)); } setCalendarOpen("checkOut"); } else { setCheckOut(next); setCalendarOpen(undefined); } }} />}</div>
+    <div className="search-field date-field checkout-date-field"><span>{english ? "Check-out Date" : "Check-out Date"}</span><button type="button" className="field-button date-trigger" onClick={() => { setCalendarOpen(current => current === "checkOut" ? undefined : "checkOut"); setSuggestionsOpen(false); setOccupancyOpen(false); }} aria-expanded={Boolean(calendarOpen)}><CalendarDays size={18} /><b>{checkOut.replaceAll("-", "/")}</b><ChevronDown size={15} /></button></div>
     <div className="search-field occupancy-field"><span>{english ? "Rooms & Guests" : "Rooms & Guests"}</span><button type="button" className="field-button" onClick={() => setOccupancyOpen(value => !value)} aria-expanded={occupancyOpen}><Users size={18} />{english ? `${rooms} room${rooms > 1 ? "s" : ""} · ${adults} adult${adults > 1 ? "s" : ""}${children ? ` · ${children} child${children > 1 ? "ren" : ""}` : ""}` : `${rooms} room(s) · ${adults} adult(s)${children ? ` · ${children} child(ren)` : ""}`}<ChevronDown size={15} /></button>
       {occupancyOpen && <div className="light-popover traveler-popover glass glass-light" role="dialog" aria-label={english ? "Select rooms & guests" : "Select rooms & guests"}>
         <div><span><strong>{english ? "Rooms" : "Rooms"}</strong><small>{english ? "Max 8 rooms" : "Max 8 rooms"}</small></span><div className="counter"><button type="button" onClick={() => setRooms(Math.max(1, rooms - 1))} disabled={rooms === 1} aria-label={english ? "Fewer rooms" : "Fewer rooms"}><Minus size={15} /></button><b>{rooms}</b><button type="button" onClick={() => { const next = Math.min(8, rooms + 1); setRooms(next); setAdults(current => Math.max(current, next)); }} disabled={rooms === 8} aria-label={english ? "More rooms" : "More rooms"}><Plus size={15} /></button></div></div>
@@ -1380,13 +1543,13 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     <button type="submit" className="primary search-cta" disabled={loading} aria-busy={loading}>{loading ? <><LoaderCircle className="spinner" size={18} />{english ? "Searching" : "Searching"}</> : <><Search size={18} />{english ? "Search Hotels" : "Search Hotels"}</>}</button>
     {error && <div className="search-inline-error" role="alert"><CircleHelp size={16} /><span>{error}</span><button type="button" onClick={() => void search()}>{english ? "Retry" : "Retry"}</button></div>}
   </form>;
-  if (selection && roomOffers.length && stage === "detail") return <HotelDetail offers={roomOffers} favorite={Boolean(selectedListing && favoriteHotels.some(item => item.id === selectedListing.id))} favoriteBusy={favoriteBusyId === selectedListing?.id} onToggleFavorite={() => { if (selectedListing) void toggleFavorite(selectedListing); }} authenticated={authenticated} onLoginRequired={onLoginRequired} onBack={() => setStage("results")} onCheckout={(selectedOffer, availability) => { setSelection({ ...selectedOffer, ...availability, totalPrice: availability.price, currency: availability.currency }); setStage("checkout"); }} />;
+  if (selection && roomOffers.length && stage === "detail") return <HotelDetail offers={roomOffers} hotelDetail={hotelDetail} favorite={Boolean(selectedListing && favoriteHotels.some(item => item.id === selectedListing.id))} favoriteBusy={favoriteBusyId === selectedListing?.id} onToggleFavorite={() => { if (selectedListing) void toggleFavorite(selectedListing); }} authenticated={authenticated} onLoginRequired={onLoginRequired} onBack={() => setStage("results")} onCheckout={(selectedOffer, availability) => { setSelection({ ...selectedOffer, ...availability, totalPrice: availability.price, currency: availability.currency }); setStage("checkout"); }} />;
   if (selection && stage === "checkout") return <HotelCheckout offer={selection} onBack={() => setStage("detail")} onComplete={created => { setOrder(created); setStage("result"); }} />;
   if (order && stage === "result") return <BookingResult order={order} type="hotel" onDetails={() => setStage("orderDetail")} onRestart={() => { setSelection(undefined); setRoomOffers([]); setSelectedListing(undefined); setOrder(undefined); setStage("home"); }} />;
   if (order && stage === "orderDetail") return <OrderDetailView initialOrder={order} locale={locale} onOrderChange={setOrder} onBack={() => setStage("result")} onRestart={() => { setSelection(undefined); setRoomOffers([]); setSelectedListing(undefined); setOrder(undefined); setStage("home"); }} />;
   if (stage === "home") return (
       <>
-        <section className={`travel-hero hotel-hero ${suggestionsOpen ? "destination-popover-open" : ""}`}>
+        <section className={`travel-hero hotel-hero ${suggestionsOpen || calendarOpen || occupancyOpen ? "destination-popover-open" : ""}`}>
           <div className="hero-copy"><p className="eyebrow">STAY SOMEWHERE REMARKABLE</p><h1>{english ? <>Every destination,<br />a new perspective</> : <>Stay in Every Scene<br />of Your Destination</>}</h1><p>{english ? "Connecting to G-Link global hotel real-time inventory..." : "Connecting to G-Link global hotel real-time inventory..."}</p></div>
           {searchForm}
         </section>
@@ -1411,7 +1574,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
       <BookingProgress current={1} labels={english ? ["Search", "Results", "Hotel details", "Payment", "Confirmation", "Booking details"] : ["Search", "Results", "Hotel details", "Payment", "Confirmation", "Booking details"]} />
       <div className="compact-search-shell">{searchForm}</div>
       <section className="results-stage" ref={resultsRef} aria-busy={loading}>
-        <div className="result-heading"><div><p className="eyebrow">CURATED STAYS</p><h2>{english ? `Hotels in ${lastSearch}` : `hotels in ${lastSearch}`}</h2><p aria-live="polite">{loading ? english ? "Loading real-time hotel list..." : "Loading real-time hotel list..." : error ? english ? "Search incomplete, please modify criteria and retry" : "Search incomplete, please modify criteria and retry" : english ? `${visibleHotels.length} hotels matched · Room types and prices confirmed in detail page` : `${visibleHotels.length} hotels matched · Room types and prices confirmed in detail page`}</p></div><div className="sort-actions"><button className="secondary mobile-filter-button" onClick={() => setFiltersOpen(true)} aria-haspopup="dialog"><SlidersHorizontal size={15} />{english ? "Filters" : "Filters"}{activeFilterCount > 0 && <b>{activeFilterCount}</b>}</button><button className={`secondary ${mapOpen ? "active" : ""}`} onClick={() => setMapOpen(value => !value)} aria-pressed={mapOpen}><MapPin size={15} />{mapOpen ? english ? "List" : "List" : english ? "Map" : "Map"}</button><select className="secondary sort-select" aria-label={english ? "Sort Hotels" : "Sort Hotels"} value={hotelSort} onChange={event => setHotelSort(event.target.value as typeof hotelSort)} disabled={loading || items.length === 0}><option value="recommended">{english ? "Recommended" : "Recommended"}</option><option value="price">{english ? "Price: Low to High" : "Price: Low to High"}</option><option value="rating">{english ? "Rating: High to Low" : "Rating: High to Low"}</option></select></div></div>
+        <div className="result-heading"><div><h2>{english ? `Hotels in ${lastSearch}` : `hotels in ${lastSearch}`}</h2><p aria-live="polite">{loading ? english ? "Loading real-time hotel list..." : "Loading real-time hotel list..." : error ? english ? "Search incomplete, please modify criteria and retry" : "Search incomplete, please modify criteria and retry" : items[0]?.searchMatch === "nearby" && selectedDestination?.destinationType === 1 ? english ? `${visibleHotels.length} nearby hotels found within 10 km` : `未找到该酒店，为您推荐 10 公里内的 ${visibleHotels.length} 家酒店` : english ? `${visibleHotels.length} hotels matched` : `${visibleHotels.length} hotels matched`}</p></div><div className="sort-actions"><button className="secondary mobile-filter-button" onClick={() => setFiltersOpen(true)} aria-haspopup="dialog"><SlidersHorizontal size={15} />{english ? "Filters" : "Filters"}{activeFilterCount > 0 && <b>{activeFilterCount}</b>}</button><button className={`secondary ${mapOpen ? "active" : ""}`} onClick={() => setMapOpen(value => !value)} aria-pressed={mapOpen}><MapPin size={15} />{mapOpen ? english ? "List" : "List" : english ? "Map" : "Map"}</button><select className="secondary sort-select" aria-label={english ? "Sort Hotels" : "Sort Hotels"} value={hotelSort} onChange={event => setHotelSort(event.target.value as typeof hotelSort)} disabled={loading || items.length === 0}><option value="recommended">{english ? "Recommended" : "Recommended"}</option><option value="price">{english ? "Price: Low to High" : "Price: Low to High"}</option><option value="rating">{english ? "Rating: High to Low" : "Rating: High to Low"}</option></select></div></div>
         {mapOpen && <div className="hotel-map glass glass-light" role="region" aria-label="Hotel Map"><div className="map-grid" />{visibleHotels.slice(0, 6).map((hotel, index) => <button key={hotel.id} style={{ left: `${12 + (index % 3) * 34}%`, top: `${18 + Math.floor(index / 3) * 42}%` }} onClick={() => void chooseHotel(hotel)}><MapPin size={14} />{money(hotel.nightlyPrice, hotel.currency)}</button>)}</div>}
         <div className="result-with-filters">
           {filtersOpen && <button className="filter-drawer-backdrop" aria-label={english ? "Close Filters" : "Close Filters"} onClick={() => setFiltersOpen(false)} />}
@@ -1423,7 +1586,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
               <input type="range" min={budget.min} max={budget.max} step={budget.step} value={maxPrice} onChange={event => setMaxPrice(Number(event.target.value))} aria-label={english ? "Max price per night" : "Max price per night"} />
               <div className="price-shortcuts">{budget.shortcuts.map(price => <button key={price} className={maxPrice === price ? "active" : ""} onClick={() => setMaxPrice(price)}>{price === budget.max ? english ? "Any" : "Any" : `≤ ${money(price, displayCurrency)}`}</button>)}</div>
             </div>
-            <div className="filter-group"><div className="filter-group-title"><strong>{english ? "Hotel Stars" : "Hotel Stars"}</strong></div>{[5, 4, 3, 2].map(star => { const count = items.filter(hotel => hotel.stars === star).length; return <label className="filter-option" key={star}><input type="checkbox" checked={starFilters.includes(star)} disabled={count === 0} onChange={event => setStarFilters(current => event.target.checked ? [...current, star] : current.filter(value => value !== star))} /><span>{star} {english ? "Stars" : "Stars"}</span><small>{count}</small></label>; })}</div>
+            <div className="filter-group"><div className="filter-group-title"><strong>{english ? "Hotel Stars" : "酒店星级"}</strong>{starFilters.length > 0 && <button className="filter-expand" onClick={() => setStarFilters([])}>{english ? "Clear" : "清除"}</button>}</div>{[5, 4, 3, 2, 1].map(star => { const count = items.filter(hotel => hotel.stars === star).length; const selected = starFilters.includes(star); return <label className={`filter-option star-filter-option ${selected ? "selected" : ""}`} key={star}><input type="checkbox" checked={selected} disabled={count === 0} onChange={event => setStarFilters(current => event.target.checked ? [...current, star].sort((a, b) => b - a) : current.filter(value => value !== star))} /><span><b aria-hidden="true">{"★".repeat(star)}</b><em>{english ? `${star} star${star > 1 ? "s" : ""}` : `${star} 星级`}</em></span><small>{count}</small></label>; })}</div>
             <div className="filter-group"><div className="filter-group-title"><strong>{english ? "Guest Rating" : "Guest Rating"}</strong></div>{[[0, english ? "Any" : "Any"], [4.5, english ? "Excellent 4.5+" : "Excellent 4.5+"], [4, english ? "Very Good 4.0+" : "Very Good 4.0+"], [3.5, english ? "Good 3.5+" : "Good 3.5+"]] .map(([rating, label]) => <label className="filter-option" key={rating}><input type="radio" name="hotel-rating" checked={minRating === rating} onChange={() => setMinRating(Number(rating))} /><span>{label}</span><small>{Number(rating) === 0 ? items.length : items.filter(hotel => hotel.rating !== undefined && hotel.rating >= Number(rating)).length}</small></label>)}</div>
             <div className="filter-group"><div className="filter-group-title"><strong>{english ? "Popular Filters" : "Popular Filters"}</strong></div><label className="filter-option"><input type="checkbox" checked={breakfastOnly} disabled={breakfastCount === 0} onChange={event => setBreakfastOnly(event.target.checked)} /><span>{english ? "Breakfast Included" : "Breakfast Included"}</span><small>{breakfastCount}</small></label><label className="filter-option"><input type="checkbox" checked={freeCancellationOnly} disabled={freeCancellationCount === 0} onChange={event => setFreeCancellationOnly(event.target.checked)} /><span>{english ? "Free Cancellation" : "Free Cancellation"}</span><small>{freeCancellationCount}</small></label></div>
             {!!districtOptions.length && <div className="filter-group"><div className="filter-group-title"><strong>{english ? "Location" : "Location"}</strong></div>{districtOptions.map(({ district, count }) => <label className="filter-option" key={district}><input type="checkbox" checked={districtFilters.includes(district)} onChange={event => setDistrictFilters(current => event.target.checked ? [...current, district] : current.filter(value => value !== district))} /><span>{district}</span><small>{count}</small></label>)}</div>}
@@ -1434,7 +1597,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
         <div className="result-list" aria-live="polite">
         {loading ? [1,2,3].map(item => <div className="hotel-card skeleton-card" key={item} aria-hidden="true" />) : visibleHotels.length ? visibleHotels.map(hotel => <article className="hotel-card" key={hotel.id}>
           {hotel.image ? <img src={hotel.image} alt="" /> : <div className="hotel-image-placeholder card"><Building2 size={28} /><span>{english ? "No image from supplier" : "No image from supplier"}</span></div>}
-          <div className="hotel-info"><div className="hotel-top"><div>{hotel.stars !== undefined && <span className="stars">{"★".repeat(hotel.stars)}</span>}<h3>{hotel.name}</h3>{hotel.district && <p>{hotel.district}</p>}</div><div className="hotel-card-actions"><button className={`favorite-button ${favoriteHotels.some(item => item.id === hotel.id) ? "active" : ""}`} onClick={() => void toggleFavorite(hotel)} disabled={favoriteBusyId === hotel.id} aria-pressed={favoriteHotels.some(item => item.id === hotel.id)} aria-label={favoriteHotels.some(item => item.id === hotel.id) ? `Remove from Favorites...${hotel.name}` : `Add to Favorites...${hotel.name}`}><Heart size={17} fill={favoriteHotels.some(item => item.id === hotel.id) ? "currentColor" : "none"} /></button>{hotel.rating !== undefined && <span className="rating"><strong>{hotel.rating}</strong>{english ? "Supplier Rating" : "Supplier Rating"}{hotel.ratingSource && <small>{english ? "Source" : "Source"}: {hotel.ratingSource}</small>}</span>}</div></div>
+          <div className="hotel-info"><div className="hotel-top"><div>{hotel.stars !== undefined && <span className="hotel-star-badge" aria-label={english ? `${hotel.stars}-star hotel` : `${hotel.stars} 星级酒店`}><b aria-hidden="true">{"★".repeat(hotel.stars)}</b><small>{english ? `${hotel.stars}-star hotel` : `${hotel.stars} 星级酒店`}</small></span>}<h3>{hotel.name}</h3>{hotel.district && <p>{hotel.district}</p>}</div><div className="hotel-card-actions"><button className={`favorite-button ${favoriteHotels.some(item => item.id === hotel.id) ? "active" : ""}`} onClick={() => void toggleFavorite(hotel)} disabled={favoriteBusyId === hotel.id} aria-pressed={favoriteHotels.some(item => item.id === hotel.id)} aria-label={favoriteHotels.some(item => item.id === hotel.id) ? `Remove from Favorites...${hotel.name}` : `Add to Favorites...${hotel.name}`}><Heart size={17} fill={favoriteHotels.some(item => item.id === hotel.id) ? "currentColor" : "none"} /></button>{hotel.rating !== undefined && <span className="rating" aria-label={english ? `Supplier rating ${hotel.rating}` : `供应商评分 ${hotel.rating}`}><strong>{hotel.rating}</strong></span>}</div></div>
           <div className="tags">{hotel.tags.map((tag, index) => <span key={`${tag}-${index}`}>{tag}</span>)}</div>
           <div className="room-line"><div><strong>{hotel.roomName}</strong><span>{hotel.breakfast} · {hotel.cancelPolicy}</span></div><div className="price"><small>per night, tax included</small><strong>{hotel.nightlyPrice ? money(hotel.nightlyPrice, hotel.currency) : "Real-time Query"}</strong><span>{hotel.nightlyPrice ? `${hotel.nights || 1} nights × ${hotel.roomNum || 1} rooms, total ${money(hotel.totalPrice ?? hotel.nightlyPrice * (hotel.nights || 1) * (hotel.roomNum || 1), hotel.currency)}` : "View detail for accurate pricing"}</span></div><button className="primary" onClick={() => chooseHotel(hotel)} disabled={hydratingId === hotel.id}>{hydratingId === hotel.id ? <><LoaderCircle className="spinner" size={16} />Search Live Products</> : "View Room Types"}</button></div></div>
         </article>) : hasSearched && !error ? <div className="hotel-empty-state glass glass-light"><div><Building2 size={28} /></div><h3>{english ? "No hotels match your criteria" : "No hotels match your criteria"}</h3><p>{items.length ? english ? "Please clear or relax some filter criteria." : "Please clear or relax some filter criteria." : english ? "Try a different destination or date..." : "Try a different destination or date..."}</p><button className="primary" onClick={() => { if (items.length) clearHotelFilters(); else setDestination("Hong Kong"); setError(""); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{items.length ? english ? "Clear Filters" : "Clear Filters" : english ? "Search Hong Kong Hotels" : "Search Hong Kong Hotels"}</button></div> : null}

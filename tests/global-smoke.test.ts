@@ -50,7 +50,17 @@ describe("global functional smoke gate", () => {
     const publicSearch = await call<unknown[]>("/api/hotels/search", {
       method: "POST",
       headers: { Cookie: guestCookie || "" },
-      body: JSON.stringify({ destination: "Shanghai", checkIn: "2026-08-12", checkOut: "2026-08-14", rooms: 1, adults: 2 }),
+      body: JSON.stringify({
+        destination: "Shanghai",
+        cityCode: "",
+        destinationType: 8,
+        latGoogle: 31.2304,
+        lngGoogle: 121.4737,
+        checkIn: "2026-08-12",
+        checkOut: "2026-08-14",
+        rooms: 1,
+        adults: 2,
+      }),
     });
     expect(publicSearch.response.status).toBe(200);
 
@@ -218,7 +228,7 @@ describe("global functional smoke gate", () => {
     const health = await call<{ status: string; database: { migrationVersion: number } }>("/api/health");
     const ready = await call<{ ready: boolean }>("/api/ready");
     expect(health.response.status).toBe(200);
-    expect(health.body.data).toMatchObject({ status: "up", database: { migrationVersion: 12 } });
+    expect(health.body.data).toMatchObject({ status: "up", database: { migrationVersion: 13 } });
     expect(ready.body.data.ready).toBe(true);
   });
 
