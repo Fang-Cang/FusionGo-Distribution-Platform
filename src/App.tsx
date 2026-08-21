@@ -50,6 +50,7 @@ import {
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { convertDisplayAmount, formatCurrencyAmount, formatDisplayAmount } from "./currency";
+import { resolveHotelDateRangeSelection } from "./hotel-date-range";
 import type {
   AccountProfile,
   AccountTraveler,
@@ -61,10 +62,12 @@ import type {
   FinanceSummary,
   FlightAfterSalesContext,
   FlightChangeOffer,
+  FlightDestination,
   FlightOffer,
   FavoriteHotel,
   HotelOffer,
   HotelBasicInfo,
+  HotelSearchFilters,
   NationalityCatalog,
   NationalityOption,
   OrderBookingDetails,
@@ -90,6 +93,62 @@ type PersonNameParts = { surname: string; givenName: string };
 type OrderProductFilter = "all" | "hotel" | "flight";
 type OrderStatusFilter = "all" | "pending" | "confirmed" | "aftersales" | OrderStatus;
 type OrderDatePreset = "all" | "today" | "7d" | "30d" | "custom";
+type HotelAttributeFilterOption = {
+  key: string;
+  label: string;
+  aliases?: string[];
+  matches: (hotel: HotelOffer) => boolean;
+};
+
+const hotelAttributeText = (hotel: HotelOffer) => [
+  hotel.name,
+  hotel.district,
+  hotel.roomName,
+  hotel.ratePlanName,
+  hotel.breakfast,
+  hotel.bedTypeDescription,
+  hotel.checkInInstructions,
+  ...(hotel.specialCheckInInstructions || []),
+  ...hotel.tags,
+].filter(Boolean).join(" ").toLowerCase();
+
+const includesHotelAttribute = (hotel: HotelOffer, keywords: string[]) => {
+  const text = hotelAttributeText(hotel);
+  return keywords.some(keyword => text.includes(keyword.toLowerCase()));
+};
+const normalizedFacilityName = (value: string) => value.toLowerCase().replace(/[^a-z0-9\u3400-\u9fff]+/g, "");
+
+const HOTEL_FACILITY_FILTERS: HotelAttributeFilterOption[] = [
+  { key: "shuttle-service", label: "Shuttle Service", matches: hotel => includesHotelAttribute(hotel, ["shuttle", "airport transfer", "接驳", "班车", "穿梭巴士"]) },
+  { key: "free-breakfast", label: "Free Breakfast", matches: hotel => !/(no breakfast|breakfast not included|without breakfast|不含早|无早)/i.test(hotel.breakfast) && /(free breakfast|breakfast included|含早|免费早餐)/i.test(hotel.breakfast) },
+  { key: "pet-friendly", label: "Pet Friendly", matches: hotel => includesHotelAttribute(hotel, ["pet friendly", "pets allowed", "可携带宠物", "宠物友好"]) },
+  { key: "charging-station", label: "Charging Station", matches: hotel => includesHotelAttribute(hotel, ["charging station", "ev charger", "electric vehicle charging", "充电桩", "充电站"]) },
+  { key: "meeting-room", label: "Meeting Room", matches: hotel => includesHotelAttribute(hotel, ["meeting room", "conference room", "会议室", "会议中心"]) },
+  { key: "laundry-facilities", label: "Laundry Facilities", matches: hotel => includesHotelAttribute(hotel, ["laundry facilities", "laundry service", "洗衣设施", "洗衣服务"]) },
+  { key: "restaurant", label: "Restaurant", matches: hotel => includesHotelAttribute(hotel, ["restaurant", "餐厅", "餐馆"]) },
+  { key: "swimming-pool", label: "Swimming Pool", aliases: ["Indoor Pool"], matches: hotel => includesHotelAttribute(hotel, ["swimming pool", "indoor pool", "outdoor pool", "游泳池", "泳池"]) },
+  { key: "free-wifi", label: "Free Wi-Fi", aliases: ["Free WiFi", "Free Wifi"], matches: hotel => includesHotelAttribute(hotel, ["free wi-fi", "free wifi", "complimentary wifi", "免费无线网络", "免费无线网"]) },
+  { key: "luggage-storage", label: "Luggage Storage", matches: hotel => includesHotelAttribute(hotel, ["luggage storage", "baggage storage", "行李寄存"]) },
+  { key: "bar", label: "Bar", matches: hotel => includesHotelAttribute(hotel, ["hotel bar", "lounge bar", "酒吧"]) },
+  { key: "24h-front-desk", label: "24h Front Desk", aliases: ["24-hour Front Desk", "24 Hour Front Desk"], matches: hotel => includesHotelAttribute(hotel, ["24h front desk", "24-hour front desk", "24 hour front desk", "24小时前台"]) },
+  { key: "fitness-center", label: "Fitness Center", matches: hotel => includesHotelAttribute(hotel, ["fitness center", "fitness centre", "gym", "健身中心", "健身房"]) },
+  { key: "parking-lot", label: "Parking Lot", aliases: ["Free Parking", "Parking"], matches: hotel => includesHotelAttribute(hotel, ["parking lot", "free parking", "private parking", "停车场", "免费停车"]) },
+  { key: "currency-exchange", label: "Currency Exchange", matches: hotel => includesHotelAttribute(hotel, ["currency exchange", "foreign exchange", "外币兑换", "货币兑换"]) },
+  { key: "spa-wellness-center", label: "Spa and Wellness Center", aliases: ["Spa & Wellness Center"], matches: hotel => includesHotelAttribute(hotel, ["spa and wellness center", "spa & wellness center", "wellness centre", "水疗中心", "康体中心"]) },
+];
+
+const ROOM_AMENITY_FILTERS: HotelAttributeFilterOption[] = [
+  { key: "baby-cot", label: "Baby Cot Available", matches: hotel => includesHotelAttribute(hotel, ["baby cot", "baby crib", "infant bed", "婴儿床"]) },
+  { key: "shower", label: "Shower", matches: hotel => includesHotelAttribute(hotel, ["shower", "淋浴"]) },
+  { key: "toilet-paper", label: "Toilet Paper", matches: hotel => includesHotelAttribute(hotel, ["toilet paper", "卫生纸", "厕纸"]) },
+  { key: "washing-machine", label: "Washing Machine", matches: hotel => includesHotelAttribute(hotel, ["washing machine", "washer", "洗衣机"]) },
+  { key: "kitchen", label: "Kitchen", matches: hotel => includesHotelAttribute(hotel, ["kitchen", "kitchenette", "厨房", "小厨房"]) },
+  { key: "bathtub", label: "Bathtub", matches: hotel => includesHotelAttribute(hotel, ["bathtub", "bath tub", "浴缸"]) },
+  { key: "air-conditioning", label: "Air Conditioning", matches: hotel => includesHotelAttribute(hotel, ["air conditioning", "air-conditioned", "空调"]) },
+  { key: "minibar", label: "Minibar", matches: hotel => includesHotelAttribute(hotel, ["minibar", "mini bar", "迷你吧"]) },
+  { key: "refrigerator", label: "Refrigerator", matches: hotel => includesHotelAttribute(hotel, ["refrigerator", "fridge", "冰箱"]) },
+  { key: "river-view", label: "River View", matches: hotel => includesHotelAttribute(hotel, ["river view", "river-view", "江景", "河景"]) },
+];
 
 const joinPersonName = ({ surname, givenName }: PersonNameParts) => [surname.trim(), givenName.trim()].filter(Boolean).join(" ");
 const isValidInternationalPhone = (value: string) => {
@@ -241,6 +300,20 @@ const stayDateLabel = (value?: string) => value
   ? new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short", timeZone: "UTC" })
     .format(new Date(`${value}T00:00:00Z`))
   : "待确认";
+const searchDateLabel = (value: string, locale: LocaleCode) => value
+  ? new Intl.DateTimeFormat(
+    locale === "en" ? "en-US" : locale === "zh-TW" ? "zh-TW" : "zh-CN",
+    { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" },
+  ).format(new Date(`${value}T00:00:00Z`))
+  : locale === "en" ? "Select date" : "请选择";
+
+function HighlightMatch({ text, query }: { text: string; query: string }) {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const start = normalizedQuery ? text.toLocaleLowerCase().indexOf(normalizedQuery) : -1;
+  if (start < 0) return <>{text}</>;
+  const end = start + normalizedQuery.length;
+  return <>{text.slice(0, start)}<mark>{text.slice(start, end)}</mark>{text.slice(end)}</>;
+}
 
 const statusLabels: Record<OrderStatus, string> = {
   PENDING_PAYMENT: "待支付",
@@ -598,7 +671,7 @@ function Dashboard({ navigate, locale, identityName }: { navigate: (page: Page) 
     : "—";
   const stats = [
     { label: "Today's Transaction Volume", value: salesToday, note: "Today's valid orders only", icon: CreditCard, tone: "blue" },
-    { label: "Today's Orders", value: data?.ordersToday ?? "—", note: "Created today", icon: TicketCheck, tone: "violet" },
+    { label: "Today's Orders", value: data?.ordersToday ?? "—", note: "Created today", icon: TicketCheck, tone: "neutral" },
     { label: "Booking Success Rate", value: data ? `${data.successRate}%` : "—", note: "Confirmed or ticketed today", icon: ShieldCheck, tone: "green" },
     { label: "Pending Exceptions", value: data?.alerts ?? "—", note: "All pending order items", icon: Bell, tone: "orange" },
   ];
@@ -1157,7 +1230,7 @@ function HotelDetail({ offers, hotelDetail, onBack, onCheckout, favorite, favori
 }
 
 function HotelCalendar({ locale, checkIn, checkOut, selecting, min, onSelect, onClose }: { locale: LocaleCode; checkIn: string; checkOut: string; selecting: "checkIn" | "checkOut"; min: string; onSelect: (value: string) => void; onClose: () => void }) {
-  const initialDate = new Date(`${selecting === "checkOut" ? checkOut : checkIn || min}T00:00:00`);
+  const initialDate = new Date(`${selecting === "checkOut" ? checkOut || checkIn || min : checkIn || min}T00:00:00`);
   const [viewMonth, setViewMonth] = useState(() => new Date(initialDate.getFullYear(), initialDate.getMonth(), 1));
   const intlLocale = locale === "en" ? "en-US" : locale;
   const weekdays = Array.from({ length: 7 }, (_, index) => new Intl.DateTimeFormat(intlLocale, { weekday: "short" })
@@ -1174,10 +1247,10 @@ function HotelCalendar({ locale, checkIn, checkOut, selecting, min, onSelect, on
     return <section className="calendar-month"><h3>{new Intl.DateTimeFormat(intlLocale, { year: "numeric", month: "long" }).format(month)}</h3><div className="calendar-weekdays" aria-hidden="true">{weekdays.map(day => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{days.map(date => {
       const iso = localDateValue(date);
       const outside = date.getMonth() !== month.getMonth();
-      const disabled = iso < min || (selecting === "checkOut" && iso <= checkIn);
+      const disabled = iso < min;
       const rangeStart = iso === checkIn;
-      const rangeEnd = iso === checkOut;
-      const inRange = iso > checkIn && iso < checkOut;
+      const rangeEnd = Boolean(checkOut) && iso === checkOut;
+      const inRange = Boolean(checkIn && checkOut) && iso > checkIn && iso < checkOut;
       return <button type="button" key={iso} className={`${outside ? "outside" : ""} ${rangeStart ? "range-start" : ""} ${rangeEnd ? "range-end" : ""} ${inRange ? "in-range" : ""} ${iso === today ? "today" : ""}`} disabled={disabled || outside} aria-pressed={rangeStart || rangeEnd} aria-label={new Intl.DateTimeFormat(intlLocale, { dateStyle: "full" }).format(date)} onClick={() => onSelect(iso)}>{outside ? "" : date.getDate()}</button>;
     })}</div></section>;
   };
@@ -1192,6 +1265,7 @@ function HotelCalendar({ locale, checkIn, checkOut, selecting, min, onSelect, on
 function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: LocaleCode; authenticated: boolean; onLoginRequired: () => void }) {
   type DestinationSuggestion = { name: string; detail: string; cityCode: string; destinationId?: string; destinationType: number; source?: number; hotelId?: number; latGoogle: number; lngGoogle: number };
   type RecentHotelSearch = DestinationSuggestion & { checkIn: string; checkOut: string; rooms: number; adults: number; searchedAt: string };
+  type HotelPageQuery = Parameters<typeof api.searchHotelsPage>[0];
   const english = locale === "en";
   const hotelTr = (zh: string, en: string, zhTw = zh) => locale === "en" ? en : locale === "zh-TW" ? zhTw : zh;
   const recentDateFormatter = useMemo(() => new Intl.DateTimeFormat(
@@ -1227,6 +1301,11 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
   const [lastSearch, setLastSearch] = useState("");
   const [items, setItems] = useState<HotelOffer[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState("");
+  const [hotelPage, setHotelPage] = useState(1);
+  const [hasMoreHotels, setHasMoreHotels] = useState(false);
+  const [activeHotelSearch, setActiveHotelSearch] = useState<HotelPageQuery>();
   const [hasSearched, setHasSearched] = useState(false);
   const [error, setError] = useState("");
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
@@ -1251,7 +1330,11 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
   const [minRating, setMinRating] = useState(0);
   const [hotelNameQuery, setHotelNameQuery] = useState("");
   const [districtFilters, setDistrictFilters] = useState<string[]>([]);
-  const [amenityFilters, setAmenityFilters] = useState<string[]>([]);
+  const [hotelFacilityFilters, setHotelFacilityFilters] = useState<string[]>([]);
+  const [roomAmenityFilters, setRoomAmenityFilters] = useState<string[]>([]);
+  const [hotelFacilitiesExpanded, setHotelFacilitiesExpanded] = useState(false);
+  const [roomAmenitiesExpanded, setRoomAmenitiesExpanded] = useState(false);
+  const [supplierHotelFilters, setSupplierHotelFilters] = useState<HotelSearchFilters>();
   const [breakfastOnly, setBreakfastOnly] = useState(false);
   const [freeCancellationOnly, setFreeCancellationOnly] = useState(false);
   const [bedType, setBedType] = useState<"" | "double" | "twin">("");
@@ -1269,6 +1352,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
   const [stage, setStage] = useState<"home" | "results" | "detail" | "checkout" | "result" | "orderDetail">("home");
   const [order, setOrder] = useState<DistributionOrder>();
   const resultsRef = useRef<HTMLElement>(null);
+  const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
   const searchSequenceRef = useRef(0);
   const searchAbortRef = useRef<AbortController | undefined>(undefined);
   useEffect(() => {
@@ -1280,7 +1364,24 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
   }, [english]);
   const [destinationSuggestions, setDestinationSuggestions] = useState<DestinationSuggestion[]>([]);
   useEffect(() => {
+    const destinationId = selectedDestination?.destinationId;
+    if (!destinationId) {
+      setSupplierHotelFilters(undefined);
+      return;
+    }
+    let active = true;
+    api.getHotelFilters(destinationId, english ? "en-US" : "zh-CN")
+      .then(filters => { if (active) setSupplierHotelFilters(filters); })
+      .catch(() => { if (active) setSupplierHotelFilters(undefined); });
+    return () => { active = false; };
+  }, [english, selectedDestination?.destinationId]);
+  useEffect(() => {
     const keyword = destination.trim();
+    if (selectedDestination?.name === keyword) {
+      setDestinationSuggestions([]);
+      setDestinationLoading(false);
+      return;
+    }
     if (keyword.length < 2) {
       setDestinationSuggestions([]);
       setDestinationLoading(false);
@@ -1291,29 +1392,48 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     setDestinationSuggestions([]);
     setDestinationLoading(true);
     const timer = setTimeout(() => {
-      api.getDestination(keyword, controller.signal)
+      api.getDestination(keyword, locale === "en" ? "en-US" : locale, controller.signal)
         .then(items => { if (active) setDestinationSuggestions(items.slice(0, 8)); })
         .catch(() => undefined)
         .finally(() => { if (active) setDestinationLoading(false); });
     }, 300);
     return () => { active = false; controller.abort(); clearTimeout(timer); };
-  }, [destination]);
+  }, [destination, locale, selectedDestination]);
   const suggestions = destinationSuggestions;
-  const popularDestinations = ["Shanghai", "Guangzhou", "Beijing", "Bangkok", "Tokyo", "Hong Kong", "Seoul", "Shenzhen", "Singapore", "Kuala Lumpur", "London", "New York"];
+  const popularDestinations: DestinationSuggestion[] = [
+    { name: "Shanghai", detail: "China", cityCode: "SHA", destinationType: 2, latGoogle: 31.2304, lngGoogle: 121.4737 },
+    { name: "Guangzhou", detail: "China", cityCode: "CAN", destinationType: 2, latGoogle: 23.1291, lngGoogle: 113.2644 },
+    { name: "Beijing", detail: "China", cityCode: "BJS", destinationType: 2, latGoogle: 39.9042, lngGoogle: 116.4074 },
+    { name: "Bangkok", detail: "Thailand", cityCode: "BKK", destinationType: 2, latGoogle: 13.7563, lngGoogle: 100.5018 },
+    { name: "Tokyo", detail: "Japan", cityCode: "TYO", destinationType: 2, latGoogle: 35.6762, lngGoogle: 139.6503 },
+    { name: "Hong Kong", detail: "Hong Kong, China", cityCode: "HKG", destinationType: 2, latGoogle: 22.3193, lngGoogle: 114.1694 },
+    { name: "Seoul", detail: "South Korea", cityCode: "SEL", destinationType: 2, latGoogle: 37.5665, lngGoogle: 126.978 },
+    { name: "Shenzhen", detail: "China", cityCode: "SZX", destinationType: 2, latGoogle: 22.5431, lngGoogle: 114.0579 },
+    { name: "Singapore", detail: "Singapore", cityCode: "SIN", destinationType: 2, latGoogle: 1.3521, lngGoogle: 103.8198 },
+    { name: "Kuala Lumpur", detail: "Malaysia", cityCode: "KUL", destinationType: 2, latGoogle: 3.139, lngGoogle: 101.6869 },
+    { name: "London", detail: "United Kingdom", cityCode: "LON", destinationType: 2, latGoogle: 51.5074, lngGoogle: -0.1278 },
+    { name: "New York", detail: "United States", cityCode: "NYC", destinationType: 2, latGoogle: 40.7128, lngGoogle: -74.006 },
+  ];
   const chooseDestination = (item: DestinationSuggestion) => {
     setDestination(item.name);
     setSelectedDestination(item);
+    setHotelFacilityFilters([]);
+    setRoomAmenityFilters([]);
     setSuggestionsOpen(false);
   };
-  const choosePopularDestination = (name: string) => {
-    setDestination(name);
-    setSelectedDestination(undefined);
-    setSuggestionsOpen(true);
+  const choosePopularDestination = (item: DestinationSuggestion) => {
+    setDestination(item.name);
+    setSelectedDestination(item);
+    setHotelFacilityFilters([]);
+    setRoomAmenityFilters([]);
+    setSuggestionsOpen(false);
     setError("");
   };
   const chooseRecentSearch = (item: RecentHotelSearch) => {
     setDestination(item.name);
     setSelectedDestination(item);
+    setHotelFacilityFilters([]);
+    setRoomAmenityFilters([]);
     setCheckIn(item.checkIn);
     setCheckOut(item.checkOut);
     setRooms(item.rooms);
@@ -1322,12 +1442,28 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
   };
   const districtOptions = useMemo(() => Array.from(new Set(items.map(hotel => hotel.district).filter(Boolean)))
     .map(district => ({ district, count: items.filter(hotel => hotel.district === district).length })), [items]);
-  const amenityOptions = useMemo(() => {
-    const preferred = ["Free Parking", "Metro Access", "Family Friendly", "Indoor Pool", "Fitness Center", "Executive Lounge", "River View", "Design Hotel", "Newly Opened"];
-    const counts = new Map<string, number>();
-    items.forEach(hotel => hotel.tags.forEach(tag => counts.set(tag, (counts.get(tag) || 0) + 1)));
-    return preferred.map(tag => ({ tag, count: counts.get(tag) || 0 }));
-  }, [items]);
+  const hotelFacilityOptions = useMemo(() => {
+    const supplierFacilities = supplierHotelFilters?.hotelFacilities || [];
+    return HOTEL_FACILITY_FILTERS.map(option => {
+      const acceptedNames = [option.label, ...(option.aliases || [])].map(normalizedFacilityName);
+      const supplierFacility = supplierFacilities.find(item => acceptedNames.includes(normalizedFacilityName(item.name)));
+      return {
+        ...option,
+        key: supplierFacility?.code || option.key,
+        count: supplierFacility?.count ?? (supplierFacilities.length ? 0 : items.filter(option.matches).length),
+      };
+    });
+  }, [items, supplierHotelFilters]);
+  const roomAmenityOptions = useMemo(() => supplierHotelFilters?.roomAmenities.length
+    ? supplierHotelFilters.roomAmenities.map(item => ({
+      key: item.code,
+      label: item.name,
+      count: item.count,
+      matches: (hotel: HotelOffer) => includesHotelAttribute(hotel, [item.name]),
+    }))
+    : ROOM_AMENITY_FILTERS.map(option => ({ ...option, count: items.filter(option.matches).length })), [items, supplierHotelFilters]);
+  const hasSupplierHotelFacilityCatalog = Boolean(supplierHotelFilters?.hotelFacilities.length);
+  const hasSupplierRoomAmenityCatalog = Boolean(supplierHotelFilters?.roomAmenities.length);
   const breakfastCount = useMemo(() => items.filter(hotel => !/(Breakfast Not Included|No Breakfast|without breakfast|no breakfast)/i.test(hotel.breakfast) && /(Breakfast Included|Breakfast|breakfast)/i.test(hotel.breakfast)).length, [items]);
   const freeCancellationCount = useMemo(() => items.filter(hotel => /(Free Cancellation|free cancellation|free cancel)/i.test(hotel.cancelPolicy)).length, [items]);
   const bedTypeOptions = useMemo(() => ([
@@ -1374,7 +1510,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
       setFavoriteBusyId("");
     }
   };
-  const activeFilterCount = starFilters.length + districtFilters.length + amenityFilters.length
+  const activeFilterCount = starFilters.length + districtFilters.length + hotelFacilityFilters.length + roomAmenityFilters.length
     + Number(minRating > 0) + Number(maxPrice < budget.max) + Number(Boolean(hotelNameQuery.trim()))
     + Number(breakfastOnly) + Number(freeCancellationOnly) + Number(Boolean(bedType));
   const visibleHotels = useMemo(() => {
@@ -1396,7 +1532,8 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
         && (minRating === 0 || (hotel.rating !== undefined && hotel.rating >= minRating))
         && (!query || searchable.includes(query))
         && (!districtFilters.length || districtFilters.includes(hotel.district))
-        && (!amenityFilters.length || amenityFilters.every(tag => hotel.tags.includes(tag)))
+        && (hasSupplierHotelFacilityCatalog || !hotelFacilityFilters.length || hotelFacilityFilters.every(key => HOTEL_FACILITY_FILTERS.find(option => option.key === key)?.matches(hotel)))
+        && (hasSupplierRoomAmenityCatalog || !roomAmenityFilters.length || roomAmenityFilters.every(key => ROOM_AMENITY_FILTERS.find(option => option.key === key)?.matches(hotel)))
         && (!breakfastOnly || includesBreakfast)
         && (!freeCancellationOnly || supportsFreeCancellation)
         && matchesBed;
@@ -1404,19 +1541,24 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     return [...filtered].sort((a, b) => hotelSort === "price"
       ? a.nightlyPrice - b.nightlyPrice
       : hotelSort === "rating" ? (b.rating ?? -1) - (a.rating ?? -1) : 0);
-  }, [amenityFilters, bedType, breakfastOnly, convert, districtFilters, freeCancellationOnly, hotelNameQuery, hotelSort, items, maxPrice, minRating, starFilters]);
+  }, [bedType, breakfastOnly, convert, districtFilters, freeCancellationOnly, hasSupplierHotelFacilityCatalog, hasSupplierRoomAmenityCatalog, hotelFacilityFilters, hotelNameQuery, hotelSort, items, maxPrice, minRating, roomAmenityFilters, starFilters]);
   const clearHotelFilters = () => {
     setMaxPrice(budget.max);
     setStarFilters([]);
     setMinRating(0);
     setHotelNameQuery("");
     setDistrictFilters([]);
-    setAmenityFilters([]);
+    setHotelFacilityFilters([]);
+    setRoomAmenityFilters([]);
     setBreakfastOnly(false);
     setFreeCancellationOnly(false);
     setBedType("");
   };
-  const search = async (destinationOverride?: string, destinationOverrideSelection?: DestinationSuggestion) => {
+  const search = async (
+    destinationOverride?: string,
+    destinationOverrideSelection?: DestinationSuggestion,
+    facilityOverrides?: { hotelFacilityCodes: string[]; roomFacilityCodes: string[] },
+  ) => {
     const cleanDestination = (destinationOverride ?? destination).trim();
     const resolvedDestination = destinationOverrideSelection
       ?? (!destinationOverride && selectedDestination?.name === cleanDestination ? selectedDestination : undefined);
@@ -1437,27 +1579,33 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     const abortController = new AbortController();
     searchAbortRef.current = abortController;
     setLoading(true);
+    setLoadingMore(false);
+    setLoadMoreError("");
+    setHotelPage(1);
+    setHasMoreHotels(false);
     setError("");
     setSuggestionsOpen(false);
     setOccupancyOpen(false);
     setItems([]);
     setHasSearched(true);
     try {
-      const nextItems = await api.searchHotels(
-        {
-          destination: cleanDestination,
-          cityCode: resolvedDestination?.cityCode || undefined,
-          destinationId: resolvedDestination?.destinationId,
-          destinationType: resolvedDestination?.destinationType,
-          source: resolvedDestination?.source,
-          hotelId: resolvedDestination?.hotelId,
-          latGoogle: resolvedDestination?.latGoogle,
-          lngGoogle: resolvedDestination?.lngGoogle,
-          language: english ? "en-US" : "zh-CN",
-          checkIn, checkOut, rooms, adults, children, childAges,
-        },
-        abortController.signal,
-      );
+      const query: HotelPageQuery = {
+        destination: cleanDestination,
+        cityCode: resolvedDestination?.cityCode || undefined,
+        destinationId: resolvedDestination?.destinationId,
+        destinationType: resolvedDestination?.destinationType,
+        source: resolvedDestination?.source,
+        hotelId: resolvedDestination?.hotelId,
+        latGoogle: resolvedDestination?.latGoogle,
+        lngGoogle: resolvedDestination?.lngGoogle,
+        language: english ? "en-US" : "zh-CN",
+        checkIn, checkOut, rooms, adults, children, childAges,
+        ...(hasSupplierHotelFacilityCatalog ? { hotelFacilityCodes: facilityOverrides?.hotelFacilityCodes ?? hotelFacilityFilters } : {}),
+        ...(hasSupplierRoomAmenityCatalog ? { roomFacilityCodes: facilityOverrides?.roomFacilityCodes ?? roomAmenityFilters } : {}),
+        page: 1,
+        pageSize: 10,
+      };
+      const result = await api.searchHotelsPage(query, abortController.signal);
       if (searchSequence !== searchSequenceRef.current) return;
       if (resolvedDestination) {
         const recent: RecentHotelSearch = {
@@ -1479,7 +1627,10 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
         });
       }
       setLastSearch(cleanDestination);
-      setItems(nextItems);
+      setActiveHotelSearch(query);
+      setHotelPage(result.currentPage);
+      setHasMoreHotels(result.hasMore);
+      setItems(result.items);
       setStage("results");
     } catch (caught) {
       if (searchSequence !== searchSequenceRef.current) return;
@@ -1488,6 +1639,44 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
       if (searchSequence === searchSequenceRef.current) setLoading(false);
     }
   };
+  const loadMoreHotels = async () => {
+    if (!activeHotelSearch || loading || loadingMore || !hasMoreHotels) return;
+    const nextPage = hotelPage + 1;
+    const searchSequence = searchSequenceRef.current;
+    searchAbortRef.current?.abort();
+    const abortController = new AbortController();
+    searchAbortRef.current = abortController;
+    const timeout = window.setTimeout(() => abortController.abort("hotel-page-timeout"), 25_000);
+    setLoadingMore(true);
+    setLoadMoreError("");
+    try {
+      const result = await api.searchHotelsPage({ ...activeHotelSearch, page: nextPage }, abortController.signal);
+      if (searchSequence !== searchSequenceRef.current) return;
+      setItems(current => {
+        const existing = new Set(current.map(hotel => String(hotel.hotelId || hotel.name)));
+        return [...current, ...result.items.filter(hotel => !existing.has(String(hotel.hotelId || hotel.name)))];
+      });
+      setHotelPage(result.currentPage);
+      setHasMoreHotels(result.hasMore);
+    } catch (caught) {
+      if (searchSequence !== searchSequenceRef.current) return;
+      setLoadMoreError(abortController.signal.aborted
+        ? english ? "Loading more hotels timed out. Please retry." : "加载更多酒店超时，请重试。"
+        : caught instanceof Error ? caught.message : english ? "Failed to load more hotels" : "加载更多酒店失败");
+    } finally {
+      window.clearTimeout(timeout);
+      setLoadingMore(false);
+    }
+  };
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    if (stage !== "results" || !sentinel || loading || loadingMore || loadMoreError || !hasMoreHotels) return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) void loadMoreHotels();
+    }, { rootMargin: "0px 0px 320px", threshold: 0.01 });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [activeHotelSearch, hasMoreHotels, hotelPage, loadMoreError, loading, loadingMore, stage]);
   const chooseHotel = async (hotel: HotelOffer) => {
     setHydratingId(hotel.id);
     setSuggestionsOpen(false);
@@ -1525,12 +1714,32 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
       {suggestionsOpen && <div className="light-popover glass glass-light" role="listbox" aria-label={english ? "Destination suggestions" : "Destination suggestions"} aria-busy={destinationLoading}>
         {!destination.trim() ? <div className="destination-default-panel">
           {recentSearches.length > 0 && <section className="recent-destinations"><h3>{hotelTr("最近搜索", "Recent searches", "近期搜尋")}</h3>{recentSearches.map(item => <button type="button" key={`${item.name}-${item.latGoogle}-${item.lngGoogle}`} onMouseDown={event => { event.preventDefault(); chooseRecentSearch(item); }}><Clock3 size={17} /><strong>{item.name}</strong><span>{recentDateLabel(item.checkIn)} – {recentDateLabel(item.checkOut)} <i /> {recentOccupancyLabel(item.rooms, item.adults)}</span></button>)}</section>}
-          <section className="popular-destinations"><h3>{english ? "Popular Destinations" : "热门目的地"}</h3><div>{popularDestinations.map(name => <button type="button" key={name} onMouseDown={event => { event.preventDefault(); choosePopularDestination(name); }}>{name}</button>)}</div></section>
-        </div> : destinationLoading ? <div className="destination-loading" role="status" aria-live="polite"><LoaderCircle className="spinner" size={19} /><span><strong>{english ? "Finding destinations" : "正在查找目的地"}</strong><small>{english ? "Loading matching cities and hotels…" : "正在加载匹配的城市与酒店…"}</small></span></div> : suggestions.length ? suggestions.map((item, index) => <button type="button" key={`${item.name}-${item.latGoogle}-${item.lngGoogle}`} role="option" aria-selected={index === 0} onMouseDown={event => { event.preventDefault(); chooseDestination(item); }}><MapPin size={16} /><span><strong>{item.name}</strong><small>{item.detail}</small></span></button>) : <p className="suggestion-empty">{english ? `Press Enter to search "${destination.trim()}"` : `Press Enter to search "${destination.trim()}"`}</p>}
+          <section className="popular-destinations"><h3>{english ? "Popular Destinations" : "热门目的地"}</h3><div>{popularDestinations.map(item => <button type="button" key={item.name} onMouseDown={event => { event.preventDefault(); choosePopularDestination(item); }}>{item.name}</button>)}</div></section>
+        </div> : destinationLoading ? <div className="destination-loading" role="status" aria-live="polite"><LoaderCircle className="spinner" size={19} /><span><strong>{english ? "Finding destinations" : "正在查找目的地"}</strong><small>{english ? "Loading matching cities and hotels…" : "正在加载匹配的城市与酒店…"}</small></span></div> : suggestions.length ? suggestions.map((item, index) => <button type="button" key={`${item.name}-${item.latGoogle}-${item.lngGoogle}`} role="option" aria-selected={index === 0} onMouseDown={event => { event.preventDefault(); chooseDestination(item); }}><MapPin size={16} /><span><strong><HighlightMatch text={item.name} query={destination} /></strong><small>{item.detail}</small></span></button>) : <p className="suggestion-empty">{english ? `Press Enter to search "${destination.trim()}"` : `Press Enter to search "${destination.trim()}"`}</p>}
       </div>}
     </label>
-    <div className="search-field date-field"><span>{english ? "Check-in Date" : "Check-in Date"}</span><button type="button" className="field-button date-trigger" onClick={() => { setCalendarOpen(current => current === "checkIn" ? undefined : "checkIn"); setSuggestionsOpen(false); setOccupancyOpen(false); }} aria-expanded={Boolean(calendarOpen)}><CalendarDays size={18} /><b>{checkIn.replaceAll("-", "/")}</b><ChevronDown size={15} /></button>{calendarOpen && <HotelCalendar locale={locale} checkIn={checkIn} checkOut={checkOut} selecting={calendarOpen} min={localDateValue(new Date())} onClose={() => setCalendarOpen(undefined)} onSelect={next => { setError(""); if (calendarOpen === "checkIn") { setCheckIn(next); if (checkOut <= next) { const following = new Date(`${next}T00:00:00`); following.setDate(following.getDate() + 1); setCheckOut(localDateValue(following)); } setCalendarOpen("checkOut"); } else { setCheckOut(next); setCalendarOpen(undefined); } }} />}</div>
-    <div className="search-field date-field checkout-date-field"><span>{english ? "Check-out Date" : "Check-out Date"}</span><button type="button" className="field-button date-trigger" onClick={() => { setCalendarOpen(current => current === "checkOut" ? undefined : "checkOut"); setSuggestionsOpen(false); setOccupancyOpen(false); }} aria-expanded={Boolean(calendarOpen)}><CalendarDays size={18} /><b>{checkOut.replaceAll("-", "/")}</b><ChevronDown size={15} /></button></div>
+    <div className="search-field date-field date-range-field">
+      <span>{english ? "Stay dates" : "入住日期"}</span>
+      <div className="date-range-control">
+        <span className="date-range-icon" aria-hidden="true"><CalendarDays size={20} /></span>
+        <button type="button" className={`date-range-part ${calendarOpen === "checkIn" ? "active" : ""}`} onClick={() => { setCalendarOpen(current => current === "checkIn" ? undefined : "checkIn"); setSuggestionsOpen(false); setOccupancyOpen(false); }} aria-expanded={calendarOpen === "checkIn"} aria-label={english ? `Check-in ${searchDateLabel(checkIn, locale)}` : `入住 ${searchDateLabel(checkIn, locale)}`}><small>{english ? "Check-in" : "入住"}</small><b>{searchDateLabel(checkIn, locale)}</b></button>
+        <ArrowRight className="date-range-arrow" size={19} aria-hidden="true" />
+        <button type="button" className={`date-range-part ${calendarOpen === "checkOut" ? "active" : ""}`} onClick={() => { setCalendarOpen(current => current === "checkOut" ? undefined : "checkOut"); setSuggestionsOpen(false); setOccupancyOpen(false); }} aria-expanded={calendarOpen === "checkOut"} aria-label={english ? `Check-out ${searchDateLabel(checkOut, locale)}` : `退房 ${searchDateLabel(checkOut, locale)}`}><small>{english ? "Check-out" : "退房"}</small><b>{searchDateLabel(checkOut, locale)}</b></button>
+      </div>
+      {calendarOpen && <HotelCalendar locale={locale} checkIn={checkIn} checkOut={checkOut} selecting={calendarOpen} min={localDateValue(new Date())} onClose={() => setCalendarOpen(undefined)} onSelect={next => {
+        setError("");
+        if (calendarOpen === "checkIn") {
+          setCheckIn(next);
+          setCheckOut("");
+          setCalendarOpen("checkOut");
+          return;
+        }
+        const range = resolveHotelDateRangeSelection(checkIn, next);
+        setCheckIn(range.checkIn);
+        setCheckOut(range.checkOut);
+        setCalendarOpen(range.complete ? undefined : "checkOut");
+      }} />}
+    </div>
     <div className="search-field occupancy-field"><span>{english ? "Rooms & Guests" : "Rooms & Guests"}</span><button type="button" className="field-button" onClick={() => setOccupancyOpen(value => !value)} aria-expanded={occupancyOpen}><Users size={18} />{english ? `${rooms} room${rooms > 1 ? "s" : ""} · ${adults} adult${adults > 1 ? "s" : ""}${children ? ` · ${children} child${children > 1 ? "ren" : ""}` : ""}` : `${rooms} room(s) · ${adults} adult(s)${children ? ` · ${children} child(ren)` : ""}`}<ChevronDown size={15} /></button>
       {occupancyOpen && <div className="light-popover traveler-popover glass glass-light" role="dialog" aria-label={english ? "Select rooms & guests" : "Select rooms & guests"}>
         <div><span><strong>{english ? "Rooms" : "Rooms"}</strong><small>{english ? "Max 8 rooms" : "Max 8 rooms"}</small></span><div className="counter"><button type="button" onClick={() => setRooms(Math.max(1, rooms - 1))} disabled={rooms === 1} aria-label={english ? "Fewer rooms" : "Fewer rooms"}><Minus size={15} /></button><b>{rooms}</b><button type="button" onClick={() => { const next = Math.min(8, rooms + 1); setRooms(next); setAdults(current => Math.max(current, next)); }} disabled={rooms === 8} aria-label={english ? "More rooms" : "More rooms"}><Plus size={15} /></button></div></div>
@@ -1569,7 +1778,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
       </>
   );
   return (
-    <section className="booking-flow-page search-results-page" ref={resultsRef}>
+    <section className="booking-flow-page search-results-page hotel-search-results-page" ref={resultsRef}>
       <button className="back-link" onClick={() => setStage("home")}><ArrowLeft size={17} />{english ? "Back to Hotel Search" : "Back to Hotel Search"}</button>
       <BookingProgress current={1} labels={english ? ["Search", "Results", "Hotel details", "Payment", "Confirmation", "Booking details"] : ["Search", "Results", "Hotel details", "Payment", "Confirmation", "Booking details"]} />
       <div className="compact-search-shell">{searchForm}</div>
@@ -1591,16 +1800,31 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
             <div className="filter-group"><div className="filter-group-title"><strong>{english ? "Popular Filters" : "Popular Filters"}</strong></div><label className="filter-option"><input type="checkbox" checked={breakfastOnly} disabled={breakfastCount === 0} onChange={event => setBreakfastOnly(event.target.checked)} /><span>{english ? "Breakfast Included" : "Breakfast Included"}</span><small>{breakfastCount}</small></label><label className="filter-option"><input type="checkbox" checked={freeCancellationOnly} disabled={freeCancellationCount === 0} onChange={event => setFreeCancellationOnly(event.target.checked)} /><span>{english ? "Free Cancellation" : "Free Cancellation"}</span><small>{freeCancellationCount}</small></label></div>
             {!!districtOptions.length && <div className="filter-group"><div className="filter-group-title"><strong>{english ? "Location" : "Location"}</strong></div>{districtOptions.map(({ district, count }) => <label className="filter-option" key={district}><input type="checkbox" checked={districtFilters.includes(district)} onChange={event => setDistrictFilters(current => event.target.checked ? [...current, district] : current.filter(value => value !== district))} /><span>{district}</span><small>{count}</small></label>)}</div>}
             <div className="filter-group"><div className="filter-group-title"><strong>{english ? "Bed Type" : "Bed Type"}</strong></div>{bedTypeOptions.map(({ value, label, count }) => <label className="filter-option" key={value}><input type="radio" name="bed-type" checked={bedType === value} disabled={value !== "" && count === 0} onChange={() => setBedType(value)} /><span>{label}</span><small>{count}</small></label>)}</div>
-            <div className="filter-group"><div className="filter-group-title"><strong>{english ? "Amenities & Features" : "Amenities & Features"}</strong></div>{amenityOptions.map(({ tag, count }) => <label className="filter-option" key={tag}><input type="checkbox" checked={amenityFilters.includes(tag)} disabled={count === 0} onChange={event => setAmenityFilters(current => event.target.checked ? [...current, tag] : current.filter(value => value !== tag))} /><span>{english ? ({ "Free Parking": "Free Parking", "Metro Access": "Metro Access", "Family Friendly": "Family Friendly", "Indoor Pool": "Indoor Pool", "Fitness Center": "Fitness Center", "Executive Lounge": "Executive Lounge", "River View": "River View", "Design Hotel": "Design Hotel", "Newly Opened": "Newly Opened" } as Record<string, string>)[tag] || tag : tag}</span><small>{count}</small></label>)}</div>
-            <button className="filter-clear" onClick={clearHotelFilters} disabled={activeFilterCount === 0}>{english ? "Clear All Filters" : "Clear All Filters"}</button>
+            <div className="filter-group attribute-filter-group">
+              <div className="filter-group-title"><strong>Hotel Facilities</strong></div>
+              {(hotelFacilitiesExpanded ? hotelFacilityOptions : hotelFacilityOptions.slice(0, 5)).map(({ key, label, count }) => <label className="filter-option" key={key}><input type="checkbox" checked={hotelFacilityFilters.includes(key)} disabled={count === 0 || loading} onChange={event => { const next = event.target.checked ? [...hotelFacilityFilters, key] : hotelFacilityFilters.filter(value => value !== key); setHotelFacilityFilters(next); if (hasSupplierHotelFacilityCatalog) void search(undefined, undefined, { hotelFacilityCodes: next, roomFacilityCodes: roomAmenityFilters }); }} /><span>{label}</span><small>{count}</small></label>)}
+              {hotelFacilityOptions.length > 5 && <button type="button" className="attribute-filter-toggle" aria-expanded={hotelFacilitiesExpanded} onClick={() => setHotelFacilitiesExpanded(value => !value)}>{hotelFacilitiesExpanded ? "Show Less" : "Show More"}</button>}
+            </div>
+            <div className="filter-group attribute-filter-group">
+              <div className="filter-group-title"><strong>Room Amenities</strong></div>
+              {(roomAmenitiesExpanded ? roomAmenityOptions : roomAmenityOptions.slice(0, 5)).map(({ key, label, count }) => <label className="filter-option" key={key}><input type="checkbox" checked={roomAmenityFilters.includes(key)} disabled={count === 0 || loading} onChange={event => { const next = event.target.checked ? [...roomAmenityFilters, key] : roomAmenityFilters.filter(value => value !== key); setRoomAmenityFilters(next); if (hasSupplierRoomAmenityCatalog) void search(undefined, undefined, { hotelFacilityCodes: hotelFacilityFilters, roomFacilityCodes: next }); }} /><span>{label}</span><small>{count}</small></label>)}
+              {roomAmenityOptions.length > 5 && <button type="button" className="attribute-filter-toggle" aria-expanded={roomAmenitiesExpanded} onClick={() => setRoomAmenitiesExpanded(value => !value)}>{roomAmenitiesExpanded ? "Show Less" : "Show More"}</button>}
+            </div>
+            <button className="filter-clear" onClick={() => { const refreshSupplierResults = (hasSupplierHotelFacilityCatalog && hotelFacilityFilters.length > 0) || (hasSupplierRoomAmenityCatalog && roomAmenityFilters.length > 0); clearHotelFilters(); if (refreshSupplierResults) void search(undefined, undefined, { hotelFacilityCodes: [], roomFacilityCodes: [] }); }} disabled={activeFilterCount === 0}>{english ? "Clear All Filters" : "Clear All Filters"}</button>
           </aside>
         <div className="result-list" aria-live="polite">
         {loading ? [1,2,3].map(item => <div className="hotel-card skeleton-card" key={item} aria-hidden="true" />) : visibleHotels.length ? visibleHotels.map(hotel => <article className="hotel-card" key={hotel.id}>
           {hotel.image ? <img src={hotel.image} alt="" /> : <div className="hotel-image-placeholder card"><Building2 size={28} /><span>{english ? "No image from supplier" : "No image from supplier"}</span></div>}
-          <div className="hotel-info"><div className="hotel-top"><div>{hotel.stars !== undefined && <span className="hotel-star-badge" aria-label={english ? `${hotel.stars}-star hotel` : `${hotel.stars} 星级酒店`}><b aria-hidden="true">{"★".repeat(hotel.stars)}</b><small>{english ? `${hotel.stars}-star hotel` : `${hotel.stars} 星级酒店`}</small></span>}<h3>{hotel.name}</h3>{hotel.district && <p>{hotel.district}</p>}</div><div className="hotel-card-actions"><button className={`favorite-button ${favoriteHotels.some(item => item.id === hotel.id) ? "active" : ""}`} onClick={() => void toggleFavorite(hotel)} disabled={favoriteBusyId === hotel.id} aria-pressed={favoriteHotels.some(item => item.id === hotel.id)} aria-label={favoriteHotels.some(item => item.id === hotel.id) ? `Remove from Favorites...${hotel.name}` : `Add to Favorites...${hotel.name}`}><Heart size={17} fill={favoriteHotels.some(item => item.id === hotel.id) ? "currentColor" : "none"} /></button>{hotel.rating !== undefined && <span className="rating" aria-label={english ? `Supplier rating ${hotel.rating}` : `供应商评分 ${hotel.rating}`}><strong>{hotel.rating}</strong></span>}</div></div>
+          <div className="hotel-info"><div className="hotel-top"><div><h3>{hotel.name}</h3>{hotel.stars !== undefined && <span className="hotel-star-badge" aria-label={english ? `${hotel.stars}-star hotel` : `${hotel.stars} 星级酒店`}><b aria-hidden="true">{"★".repeat(hotel.stars)}</b></span>}{(hotel.district || hotel.distanceKm !== undefined) && <p className="hotel-location-summary">{hotel.district && <span>{hotel.district}</span>}{hotel.distanceKm !== undefined && <span className="hotel-distance"><MapPin size={12} />{hotelTr(`距目的地 ${hotel.distanceKm.toFixed(1)} km`, `${hotel.distanceKm.toFixed(1)} km from destination`, `距目的地 ${hotel.distanceKm.toFixed(1)} km`)}</span>}</p>}</div><div className="hotel-card-actions"><button className={`favorite-button ${favoriteHotels.some(item => item.id === hotel.id) ? "active" : ""}`} onClick={() => void toggleFavorite(hotel)} disabled={favoriteBusyId === hotel.id} aria-pressed={favoriteHotels.some(item => item.id === hotel.id)} aria-label={favoriteHotels.some(item => item.id === hotel.id) ? `Remove from Favorites...${hotel.name}` : `Add to Favorites...${hotel.name}`}><Heart size={17} fill={favoriteHotels.some(item => item.id === hotel.id) ? "currentColor" : "none"} /></button>{hotel.rating !== undefined && <span className="rating" aria-label={english ? `Supplier rating ${hotel.rating}` : `供应商评分 ${hotel.rating}`}><strong>{hotel.rating}</strong></span>}</div></div>
           <div className="tags">{hotel.tags.map((tag, index) => <span key={`${tag}-${index}`}>{tag}</span>)}</div>
-          <div className="room-line"><div><strong>{hotel.roomName}</strong><span>{hotel.breakfast} · {hotel.cancelPolicy}</span></div><div className="price"><small>per night, tax included</small><strong>{hotel.nightlyPrice ? money(hotel.nightlyPrice, hotel.currency) : "Real-time Query"}</strong><span>{hotel.nightlyPrice ? `${hotel.nights || 1} nights × ${hotel.roomNum || 1} rooms, total ${money(hotel.totalPrice ?? hotel.nightlyPrice * (hotel.nights || 1) * (hotel.roomNum || 1), hotel.currency)}` : "View detail for accurate pricing"}</span></div><button className="primary" onClick={() => chooseHotel(hotel)} disabled={hydratingId === hotel.id}>{hydratingId === hotel.id ? <><LoaderCircle className="spinner" size={16} />Search Live Products</> : "View Room Types"}</button></div></div>
+          <div className="room-line"><div className="price"><small>per night, tax included</small><strong>{hotel.nightlyPrice ? money(hotel.nightlyPrice, hotel.currency) : "Real-time Query"}</strong>{hotel.nightlyPrice ? <span>{`${hotel.nights || 1} nights × ${hotel.roomNum || 1} rooms, total ${money(hotel.totalPrice ?? hotel.nightlyPrice * (hotel.nights || 1) * (hotel.roomNum || 1), hotel.currency)}`}</span> : null}</div><button className="primary" onClick={() => chooseHotel(hotel)} disabled={hydratingId === hotel.id}>{hydratingId === hotel.id ? <><LoaderCircle className="spinner" size={16} />Search Live Products</> : "View Room Types"}</button></div></div>
         </article>) : hasSearched && !error ? <div className="hotel-empty-state glass glass-light"><div><Building2 size={28} /></div><h3>{english ? "No hotels match your criteria" : "No hotels match your criteria"}</h3><p>{items.length ? english ? "Please clear or relax some filter criteria." : "Please clear or relax some filter criteria." : english ? "Try a different destination or date..." : "Try a different destination or date..."}</p><button className="primary" onClick={() => { if (items.length) clearHotelFilters(); else setDestination("Hong Kong"); setError(""); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{items.length ? english ? "Clear Filters" : "Clear Filters" : english ? "Search Hong Kong Hotels" : "Search Hong Kong Hotels"}</button></div> : null}
+        {!loading && items.length > 0 && hasMoreHotels && <div className="hotel-load-more" ref={loadMoreSentinelRef} aria-live="polite">{loadingMore && <span role="status" aria-label={english ? "Loading more hotels" : "正在加载更多酒店"}><LoaderCircle className="spinner" size={20} /></span>}{loadMoreError && <><p role="alert">{loadMoreError}</p><button className="secondary" type="button" onClick={() => { setLoadMoreError(""); void loadMoreHotels(); }}>{english ? "Retry" : "重试"}</button></>}</div>}
+        {!loading && hasSearched && visibleHotels.length > 0 && !hasMoreHotels && !loadMoreError && <div className="hotel-list-end" role="status">
+          <div className="hotel-list-end-illustration" aria-hidden="true"><span className="hotel-list-end-line" /><span className="hotel-list-end-icon"><Building2 size={28} strokeWidth={1.7} /><i><Check size={12} strokeWidth={3} /></i></span><span className="hotel-list-end-line" /></div>
+          <strong>{hotelTr("已显示全部酒店", "You've reached the end", "已顯示全部飯店")}</strong>
+          <p>{hotelTr("没有更多酒店了", "There are no more hotels to show.", "沒有更多飯店了")}</p>
+        </div>}
         </div></div>
       </section>
     </section>
@@ -1835,11 +2059,155 @@ function FlightPaymentPage({
   </section>;
 }
 
+type FlightSegmentDraft = {
+  origin: string;
+  originText: string;
+  originType: 1 | 2;
+  destination: string;
+  destinationText: string;
+  destinationType: 1 | 2;
+  date: string;
+};
+
+type RecentFlightSearch = {
+  tripType: TripType;
+  segments: FlightSegmentDraft[];
+  adults: number;
+  children: number;
+  infants: number;
+  searchedAt: string;
+};
+
+function FlightLocationField({
+  kind,
+  label,
+  ariaLabel,
+  value,
+  locale,
+  recentSearches,
+  onInput,
+  onSelect,
+  onSelectRecent,
+}: {
+  kind: "origin" | "destination";
+  label: string;
+  ariaLabel: string;
+  value: string;
+  locale: LocaleCode;
+  recentSearches: RecentFlightSearch[];
+  onInput: (value: string) => void;
+  onSelect: (destination: FlightDestination) => void;
+  onSelectRecent: (search: RecentFlightSearch) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [showPopular, setShowPopular] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<FlightDestination[]>([]);
+  const keyword = value.trim();
+  const popularCities = useMemo<FlightDestination[]>(() => {
+    const names = locale === "en"
+      ? ["Singapore", "Bangkok", "Kuala Lumpur", "Seoul", "Tokyo", "Guangzhou"]
+      : locale === "zh-TW"
+        ? ["新加坡", "曼谷", "吉隆坡", "首爾", "東京", "廣州"]
+        : ["新加坡", "曼谷", "吉隆坡", "首尔", "东京", "广州"];
+    return ["SIN", "BKK", "KUL", "SEL", "TYO", "CAN"].map((code, index) => ({
+      code,
+      type: 1,
+      cityCode: code,
+      cityName: names[index],
+      country: "",
+      displayName: names[index],
+      detail: code,
+    }));
+  }, [locale]);
+  const recentDateFormatter = useMemo(() => new Intl.DateTimeFormat(
+    locale === "en" ? "en-US" : locale,
+    { month: "short", day: "numeric", timeZone: "UTC" },
+  ), [locale]);
+  const recentRouteLabel = (search: RecentFlightSearch) => {
+    const first = search.segments[0];
+    if (!first) return "";
+    if (search.tripType === "roundtrip") return `${first.origin} ↔ ${first.destination}`;
+    return search.segments.map(segment => segment.origin)
+      .concat(search.segments.at(-1)?.destination || "")
+      .filter(Boolean)
+      .join(" → ");
+  };
+  const recentDateLabel = (search: RecentFlightSearch) => search.segments
+    .map(segment => segment.date)
+    .filter((date, index, all) => Boolean(date) && all.indexOf(date) === index)
+    .map(date => recentDateFormatter.format(new Date(`${date}T00:00:00Z`)))
+    .join(" – ");
+
+  useEffect(() => {
+    if (!open || showPopular || !keyword) {
+      setSuggestions([]);
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    setLoading(true);
+    const timer = window.setTimeout(() => {
+      api.searchFlightDestinations(keyword, locale, controller.signal)
+        .then(items => { if (active) setSuggestions(items.slice(0, 10)); })
+        .catch(() => { if (active) setSuggestions([]); })
+        .finally(() => { if (active) setLoading(false); });
+    }, 250);
+    return () => {
+      active = false;
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [keyword, locale, open, showPopular]);
+
+  const english = locale === "en";
+  return <label className="search-field flight-location-field">
+    <span>{label}</span>
+    <div>{kind === "origin" ? <Plane size={18} /> : <MapPin size={18} />}<input
+      aria-label={ariaLabel}
+      aria-autocomplete="list"
+      aria-expanded={open}
+      autoComplete="off"
+      placeholder={english ? "City, airport or code" : "城市、机场或三字码"}
+      value={value}
+      onFocus={() => { setOpen(true); setShowPopular(true); }}
+      onClick={() => { setOpen(true); setShowPopular(true); }}
+      onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+      onChange={event => { onInput(event.target.value); setOpen(true); setShowPopular(!event.target.value.trim()); }}
+      onKeyDown={event => { if (event.key === "Escape") setOpen(false); }}
+    /></div>
+    {open && <div className="light-popover glass glass-light" role="listbox" aria-label={english ? "Flight destinations" : "机票城市和机场"} aria-busy={!showPopular && loading}>
+      {showPopular ? <section className="flight-popular-panel">
+        {recentSearches.length > 0 && <section className="flight-recent-searches">
+          <h3>{english ? "Recent searches" : locale === "zh-TW" ? "近期搜尋" : "最近搜索"}</h3>
+          <div>{recentSearches.map(search => <button type="button" role="option" aria-selected="false" key={`${search.searchedAt}-${recentRouteLabel(search)}`} onMouseDown={event => { event.preventDefault(); onSelectRecent(search); setShowPopular(false); setOpen(false); }}><Clock3 size={16} /><span><strong>{recentRouteLabel(search)}</strong><small>{recentDateLabel(search)} · {search.adults + search.children + search.infants}{english ? " travelers" : "人"}</small></span></button>)}</div>
+        </section>}
+        <h3>{english ? "Popular cities" : locale === "zh-TW" ? "熱門城市" : "热门城市"}</h3>
+        <div>{popularCities.map(item => <button type="button" role="option" aria-selected="false" aria-label={`${item.displayName} ${item.code}`} key={item.code} onMouseDown={event => { event.preventDefault(); onSelect(item); setShowPopular(false); setOpen(false); }}><span>{item.displayName}</span></button>)}</div>
+      </section>
+        : loading ? <div className="destination-loading" role="status"><LoaderCircle className="spinner" size={18} /><span><strong>{english ? "Finding cities and airports" : "正在查找城市和机场"}</strong><small>{english ? "Chinese, English and IATA codes are supported" : "支持中文、英文和 IATA 三字码"}</small></span></div>
+        : suggestions.length ? suggestions.map(item => <button
+          type="button"
+          role="option"
+          aria-selected="false"
+          key={`${item.type}-${item.code}`}
+          onMouseDown={event => { event.preventDefault(); onSelect(item); setOpen(false); }}
+        >{item.type === 1 ? <MapPin size={16} /> : <Plane size={16} />}<span><strong><HighlightMatch text={item.displayName} query={keyword} /> <b>{item.code}</b></strong><small>{item.type === 1 ? english ? "City" : "城市" : english ? "Airport" : "机场"} · {item.detail}</small></span></button>)
+          : <p className="suggestion-empty">{keyword ? english ? "No matching city or airport. Try another name or code." : "未找到匹配城市或机场，请尝试其他中英文名称或三字码。" : english ? "Enter a city, airport or code." : "请输入城市、机场或三字码。"}</p>}
+    </div>}
+  </label>;
+}
+
 function FlightSearch({ locale, authenticated, onLoginRequired }: { locale: LocaleCode; authenticated: boolean; onLoginRequired: () => void }) {
   const english = locale === "en";
   const { displayCurrency, convert, money } = useDisplayMoney();
   const [from, setFrom] = useState("SHA");
+  const [fromText, setFromText] = useState("SHA");
+  const [fromType, setFromType] = useState<1 | 2>(1);
   const [to, setTo] = useState("HKG");
+  const [toText, setToText] = useState("HKG");
+  const [toType, setToType] = useState<1 | 2>(1);
   const [departureDate, setDepartureDate] = useState(() => {
     const date = new Date();
     date.setDate(date.getDate() + 1);
@@ -1851,14 +2219,24 @@ function FlightSearch({ locale, authenticated, onLoginRequired }: { locale: Loca
     return localDateValue(date);
   });
   const [tripType, setTripType] = useState<TripType>("oneway");
-  const [multiSegments, setMultiSegments] = useState(() => {
+  const [recentFlightSearches, setRecentFlightSearches] = useState<RecentFlightSearch[]>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem("fusiongo.recentFlightSearches") || "[]");
+      return Array.isArray(stored)
+        ? stored.filter(item => item && Array.isArray(item.segments) && item.segments.length > 0).slice(0, 3)
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  const [multiSegments, setMultiSegments] = useState<FlightSegmentDraft[]>(() => {
     const first = new Date();
     first.setDate(first.getDate() + 1);
     const second = new Date();
     second.setDate(second.getDate() + 5);
     return [
-      { origin: "SHA", destination: "HKG", date: localDateValue(first) },
-      { origin: "HKG", destination: "BKK", date: localDateValue(second) },
+      { origin: "SHA", originText: "SHA", originType: 1, destination: "HKG", destinationText: "HKG", destinationType: 1, date: localDateValue(first) },
+      { origin: "HKG", originText: "HKG", originType: 1, destination: "BKK", destinationText: "BKK", destinationType: 1, date: localDateValue(second) },
     ];
   });
   const [items, setItems] = useState<FlightOffer[]>([]);
@@ -2030,18 +2408,25 @@ function FlightSearch({ locale, authenticated, onLoginRequired }: { locale: Loca
     setPageNumber(1);
   };
   const search = async (date = departureDate) => {
-    const journeys = tripType === "multicity"
-      ? multiSegments
+    const recentSegments: FlightSegmentDraft[] = tripType === "multicity"
+      ? multiSegments.map(segment => ({ ...segment }))
       : tripType === "roundtrip"
         ? [
-          { origin: from, destination: to, date },
-          { origin: to, destination: from, date: returnDate },
+          { origin: from, originText: fromText, originType: fromType, destination: to, destinationText: toText, destinationType: toType, date },
+          { origin: to, originText: toText, originType: toType, destination: from, destinationText: fromText, destinationType: fromType, date: returnDate },
         ]
-        : [{ origin: from, destination: to, date }];
-    if (journeys.some(journey => journey.origin.trim().length < 3
-      || journey.destination.trim().length < 3
+        : [{ origin: from, originText: fromText, originType: fromType, destination: to, destinationText: toText, destinationType: toType, date }];
+    const journeys = recentSegments.map(segment => ({
+      origin: segment.origin,
+      destination: segment.destination,
+      date: segment.date,
+      originType: segment.originType,
+      destinationType: segment.destinationType,
+    }));
+    if (journeys.some(journey => !/^[A-Z]{3}$/.test(journey.origin.trim().toUpperCase())
+      || !/^[A-Z]{3}$/.test(journey.destination.trim().toUpperCase())
       || !journey.date)) {
-      return setError(english ? "Complete the origin, destination, and date for every journey." : "Please fill departure, destination, and date for each segment");
+      return setError(english ? "Select a city or airport from the suggestions for every journey." : "请从候选列表中选择每一段的出发地和目的地");
     }
     if (journeys.some(journey => journey.origin === journey.destination)) {
       return setError(english ? "Origin and destination must be different." : "Departure and destination cannot be the same for a segment");
@@ -2060,7 +2445,7 @@ function FlightSearch({ locale, authenticated, onLoginRequired }: { locale: Loca
     setDepartureDate(date);
     try {
       const primary = journeys[0];
-      setItems(await api.searchFlights({
+      const offers = await api.searchFlights({
         from: primary.origin,
         to: primary.destination,
         departureDate: primary.date,
@@ -2069,7 +2454,22 @@ function FlightSearch({ locale, authenticated, onLoginRequired }: { locale: Loca
         infants,
         tripType: tripType === "oneway" ? 1 : tripType === "roundtrip" ? 2 : 3,
         journeys,
-      }));
+      });
+      setItems(offers);
+      const recent: RecentFlightSearch = {
+        tripType,
+        segments: recentSegments,
+        adults,
+        children,
+        infants,
+        searchedAt: new Date().toISOString(),
+      };
+      setRecentFlightSearches(current => {
+        const signature = (item: RecentFlightSearch) => `${item.tripType}:${item.segments.map(segment => `${segment.origin}-${segment.destination}-${segment.date}`).join("|")}`;
+        const next = [recent, ...current.filter(item => signature(item) !== signature(recent))].slice(0, 3);
+        window.localStorage.setItem("fusiongo.recentFlightSearches", JSON.stringify(next));
+        return next;
+      });
       setPageNumber(1);
       setStage("results");
     } catch (caught) {
@@ -2086,14 +2486,60 @@ function FlightSearch({ locale, authenticated, onLoginRequired }: { locale: Loca
   };
   const updateMultiSegment = (
     index: number,
-    key: "origin" | "destination" | "date",
+    key: "date",
     value: string,
   ) => {
     setMultiSegments(current => current.map((segment, segmentIndex) =>
       segmentIndex === index
-        ? { ...segment, [key]: key === "date" ? value : value.toUpperCase() }
+        ? { ...segment, [key]: value }
         : segment));
     setError("");
+  };
+  const inputMultiSegmentLocation = (index: number, key: "origin" | "destination", value: string) => {
+    setMultiSegments(current => current.map((segment, segmentIndex) => segmentIndex === index
+      ? {
+        ...segment,
+        [key]: "",
+        [key === "origin" ? "originText" : "destinationText"]: value,
+      }
+      : segment));
+    setError("");
+  };
+  const selectMultiSegmentLocation = (index: number, key: "origin" | "destination", item: FlightDestination) => {
+    setMultiSegments(current => current.map((segment, segmentIndex) => segmentIndex === index
+      ? {
+        ...segment,
+        [key]: item.code,
+        [key === "origin" ? "originText" : "destinationText"]: `${item.displayName} (${item.code})`,
+        [key === "origin" ? "originType" : "destinationType"]: item.type,
+      }
+      : segment));
+    setError("");
+  };
+  const restoreRecentFlightSearch = (recent: RecentFlightSearch) => {
+    const first = recent.segments[0];
+    if (!first) return;
+    setTripType(recent.tripType);
+    setAdults(Math.max(1, recent.adults));
+    setChildren(Math.max(0, recent.children));
+    setInfants(Math.max(0, Math.min(recent.infants, recent.adults)));
+    if (recent.tripType === "multicity") {
+      setMultiSegments(recent.segments.map(segment => ({ ...segment })));
+      setDepartureDate(first.date);
+    } else {
+      setFrom(first.origin);
+      setFromText(first.originText || first.origin);
+      setFromType(first.originType);
+      setTo(first.destination);
+      setToText(first.destinationText || first.destination);
+      setToType(first.destinationType);
+      setDepartureDate(first.date);
+      if (recent.tripType === "roundtrip") setReturnDate(recent.segments[1]?.date || first.date);
+    }
+    setItems([]);
+    setError("");
+    setFareError("");
+    setStage("home");
   };
   const routeLabel = tripType === "roundtrip"
     ? `${from} ↔ ${to}`
@@ -2143,8 +2589,8 @@ function FlightSearch({ locale, authenticated, onLoginRequired }: { locale: Loca
       <div className="multi-segment-list">
         {multiSegments.map((segment, index) => <div className="multi-segment-row" key={`${index}-${segment.date}`}>
           <b>{english ? `Journey ${index + 1}` : `Segment ${index + 1}`}</b>
-          <label className="search-field"><span>{english ? "From" : "From"}</span><div><Plane size={17} /><input aria-label={english ? `Journey ${index + 1} origin` : `Segment ${index + 1} origin`} value={segment.origin} onChange={event => updateMultiSegment(index, "origin", event.target.value)} /></div></label>
-          <label className="search-field"><span>{english ? "To" : "To"}</span><div><MapPin size={17} /><input aria-label={english ? `Journey ${index + 1} destination` : `Segment ${index + 1} destination`} value={segment.destination} onChange={event => updateMultiSegment(index, "destination", event.target.value)} /></div></label>
+          <FlightLocationField kind="origin" label={english ? "From" : "From"} ariaLabel={english ? `Journey ${index + 1} origin` : `Segment ${index + 1} origin`} value={segment.originText} locale={locale} recentSearches={recentFlightSearches} onInput={value => inputMultiSegmentLocation(index, "origin", value)} onSelect={item => selectMultiSegmentLocation(index, "origin", item)} onSelectRecent={restoreRecentFlightSearch} />
+          <FlightLocationField kind="destination" label={english ? "To" : "To"} ariaLabel={english ? `Journey ${index + 1} destination` : `Segment ${index + 1} destination`} value={segment.destinationText} locale={locale} recentSearches={recentFlightSearches} onInput={value => inputMultiSegmentLocation(index, "destination", value)} onSelect={item => selectMultiSegmentLocation(index, "destination", item)} onSelectRecent={restoreRecentFlightSearch} />
           <label className="search-field"><span>{english ? "Departure date" : "Departure Date"}</span><div><CalendarDays size={17} /><input aria-label={english ? `Journey ${index + 1} departure date` : `Segment ${index + 1} date`} type="date" min={index === 0 ? localDateValue(new Date()) : multiSegments[index - 1].date} value={segment.date} onChange={event => updateMultiSegment(index, "date", event.target.value)} /></div></label>
           <button className="segment-remove" aria-label={english ? `Remove journey ${index + 1}` : `Remove segment ${index + 1}`} onClick={() => setMultiSegments(current => current.filter((_, segmentIndex) => segmentIndex !== index))} disabled={multiSegments.length === 2}><X size={16} /></button>
         </div>)}
@@ -2152,7 +2598,11 @@ function FlightSearch({ locale, authenticated, onLoginRequired }: { locale: Loca
       <div className="multi-search-actions">
         <button className="add-segment" onClick={() => setMultiSegments(current => current.length >= 4 ? current : [...current, {
           origin: current.at(-1)?.destination || "",
+          originText: current.at(-1)?.destinationText || "",
+          originType: current.at(-1)?.destinationType || 1,
           destination: "",
+          destinationText: "",
+          destinationType: 1,
           date: current.at(-1)?.date || departureDate,
         }])} disabled={multiSegments.length >= 4}><Plus size={16} />{english ? "Add journey" : "Add Segment"}</button>
         {travelerField}
@@ -2161,9 +2611,9 @@ function FlightSearch({ locale, authenticated, onLoginRequired }: { locale: Loca
       {error && stage === "home" && <div className="search-inline-error" role="alert"><CircleHelp size={16} /><span>{error}</span></div>}
     </section>
     : <section className={`search-card flight-search ${tripType === "roundtrip" ? "roundtrip-search" : ""} glass glass-dark`} aria-label={tripType === "roundtrip" ? english ? "Round-trip flight search" : "Round-trip Flight Search" : english ? "One-way flight search" : "One-way Flight Search"}>
-      <label className="search-field"><span>{english ? "From" : "From"}</span><div><Plane size={18} /><input aria-label={english ? "Origin" : "From"} value={from} onChange={e => { setFrom(e.target.value.toUpperCase()); setError(""); }} /></div></label>
-      <button className="route-swap" aria-label={english ? "Direction" : "Direction"}><ArrowRight size={16} /></button>
-      <label className="search-field"><span>{english ? "To" : "To"}</span><div><MapPin size={18} /><input aria-label={english ? "Destination" : "To"} value={to} onChange={e => { setTo(e.target.value.toUpperCase()); setError(""); }} /></div></label>
+      <FlightLocationField kind="origin" label={english ? "From" : "From"} ariaLabel={english ? "Origin" : "From"} value={fromText} locale={locale} recentSearches={recentFlightSearches} onInput={value => { setFromText(value); setFrom(""); setError(""); }} onSelect={item => { setFrom(item.code); setFromText(`${item.displayName} (${item.code})`); setFromType(item.type); setError(""); }} onSelectRecent={restoreRecentFlightSearch} />
+      <button className="route-swap" aria-label={english ? "Swap origin and destination" : "交换出发地和目的地"} onClick={() => { setFrom(to); setFromText(toText); setFromType(toType); setTo(from); setToText(fromText); setToType(fromType); setError(""); }}><ArrowRight size={16} /></button>
+      <FlightLocationField kind="destination" label={english ? "To" : "To"} ariaLabel={english ? "Destination" : "To"} value={toText} locale={locale} recentSearches={recentFlightSearches} onInput={value => { setToText(value); setTo(""); setError(""); }} onSelect={item => { setTo(item.code); setToText(`${item.displayName} (${item.code})`); setToType(item.type); setError(""); }} onSelectRecent={restoreRecentFlightSearch} />
       <label className="search-field"><span>{english ? "Departure date" : "Departure Date"}</span><div><CalendarDays size={18} /><input aria-label={english ? "Departure date" : "Departure Date"} type="date" min={localDateValue(new Date())} value={departureDate} onChange={e => { const next = e.target.value; setDepartureDate(next); setError(""); if (returnDate < next) setReturnDate(next); }} /></div></label>
       {tripType === "roundtrip" && <label className="search-field"><span>{english ? "Return date" : "Return Date"}</span><div><CalendarDays size={18} /><input aria-label={english ? "Return date" : "Return Date"} type="date" value={returnDate} min={departureDate} onChange={e => { setReturnDate(e.target.value); setError(""); }} /></div></label>}
       {travelerField}

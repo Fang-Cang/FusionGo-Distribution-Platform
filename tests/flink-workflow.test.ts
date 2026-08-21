@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   createFlinkOrder,
+  normalizeFlinkFlightDestinations,
   payFlinkOrder,
   refreshFlinkCabin,
+  searchFlinkFlightDestinations,
   searchFlinkFlights,
   verifyFlinkFlight,
   type FlightQuoteContext,
@@ -36,7 +38,76 @@ const quote: FlightQuoteContext = {
   subtitle: "CX937 · 2026-08-20",
 };
 
+describe("F-Link flight destination search", () => {
+  it("calls airports.search with the Daxing International keyword and normalizes city and airport choices", async () => {
+    const { client, calls } = stubClient({
+      "/airports/search": {
+        currentPage: 1,
+        data: [{
+          id: 1,
+          airPort: "PKX",
+          airPortName: "北京大兴国际机场",
+          cityCode: "BJS",
+          cityName: "北京",
+          country: "中国",
+        }],
+      },
+    });
+
+    const results = await searchFlinkFlightDestinations(client, "大兴国际", "zh_CN");
+
+    expect(calls[0]).toEqual({ path: "/airports/search", body: { keyword: "大兴国际" } });
+    expect(results).toEqual([
+      expect.objectContaining({ code: "BJS", type: 1, cityName: "北京" }),
+      expect.objectContaining({ code: "PKX", type: 2, airportName: "北京大兴国际机场" }),
+    ]);
+  });
+
+  it("accepts the paginated data shape documented by the Flink OpenAPI", () => {
+    expect(normalizeFlinkFlightDestinations({ data: { data: [{
+      airPort: "SIN",
+      airPortName: "Singapore Changi Airport",
+      cityCode: "SIN",
+      cityName: "Singapore",
+      country: "Singapore",
+    }] } })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "SIN", type: 1, displayName: "Singapore" }),
+      expect.objectContaining({ code: "SIN", type: 2, displayName: "Singapore Changi Airport" }),
+    ]));
+  });
+});
+
 describe("F-Link mandatory booking workflow", () => {
+  it("sends the required origin and destination types for a one-way city search", async () => {
+    const { client, calls } = stubClient({
+      "/flight/search": { segments: {}, flight: [] },
+    });
+
+    await searchFlinkFlights(client, {
+      from: "HKG",
+      to: "SIN",
+      departureDate: "2026-09-25",
+      adults: 1,
+      journeys: [{
+        date: "2026-09-25",
+        destination: "SIN",
+        destinationType: 1,
+        origin: "HKG",
+        originType: 1,
+      }],
+    });
+
+    expect(calls[0].body).toMatchObject({
+      journeys: [{
+        date: "2026-09-25",
+        destination: "SIN",
+        destinationType: 1,
+        origin: "HKG",
+        originType: 1,
+      }],
+    });
+  });
+
   it("sends round-trip journeys and preserves both legs in the offer", async () => {
     const { client, calls } = stubClient({
       "/flight/search": {
@@ -90,8 +161,8 @@ describe("F-Link mandatory booking workflow", () => {
     expect(calls[0].body).toMatchObject({
       tripType: 2,
       journeys: [
-        expect.objectContaining({ origin: "SIN", destination: "BKK", date: "2026-08-20" }),
-        expect.objectContaining({ origin: "BKK", destination: "SIN", date: "2026-08-27" }),
+        expect.objectContaining({ origin: "SIN", destination: "BKK", date: "2026-08-20", originType: 1, destinationType: 1 }),
+        expect.objectContaining({ origin: "BKK", destination: "SIN", date: "2026-08-27", originType: 1, destinationType: 1 }),
       ],
     });
     expect(result.offers[0]).toMatchObject({

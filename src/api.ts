@@ -9,9 +9,12 @@ import type {
   FlightAddOns,
   FlightAfterSalesContext,
   FlightChangeOffer,
+  FlightDestination,
   FlightOffer,
   FavoriteHotel,
   HotelOffer,
+  HotelSearchFilters,
+  HotelSearchPage,
   HotelBasicInfo,
   HotelPriceBreakdown,
   OrderBookingDetails,
@@ -108,10 +111,10 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
-  getDestination: (keyword: string, signal?: AbortSignal) =>
+  getDestination: (keyword: string, language: "zh-CN" | "zh-TW" | "en-US", signal?: AbortSignal) =>
     request<Array<{ name: string; detail: string; cityCode: string; destinationId?: string; destinationType: number; source?: number; hotelId?: number; latGoogle: number; lngGoogle: number }>>("/api/hotels/destination", {
       method: "POST",
-      body: JSON.stringify({ keyword }),
+      body: JSON.stringify({ keyword, language }),
       signal,
     }),
   getHotelById: (hotelId: string, hotelName: string) =>
@@ -120,13 +123,27 @@ export const api = {
       body: JSON.stringify({ hotelId, hotelName }),
     }),
   searchHotels: (
-    params: { destination: string; cityCode?: string; destinationId?: string; destinationType?: number; source?: number; hotelId?: number; latGoogle?: number; lngGoogle?: number; language?: "zh-CN" | "en-US"; checkIn: string; checkOut: string; rooms?: number; adults?: number; children?: number; childAges?: number[] },
+    params: { destination: string; cityCode?: string; destinationId?: string; destinationType?: number; source?: number; hotelId?: number; latGoogle?: number; lngGoogle?: number; language?: "zh-CN" | "en-US"; checkIn: string; checkOut: string; rooms?: number; adults?: number; children?: number; childAges?: number[]; hotelFacilityCodes?: string[]; roomFacilityCodes?: string[] },
     signal?: AbortSignal,
   ) =>
     request<HotelOffer[]>("/api/hotels/search", {
       method: "POST",
       body: JSON.stringify(params),
       signal,
+    }),
+  searchHotelsPage: (
+    params: { destination: string; cityCode?: string; destinationId?: string; destinationType?: number; source?: number; hotelId?: number; latGoogle?: number; lngGoogle?: number; language?: "zh-CN" | "en-US"; checkIn: string; checkOut: string; rooms?: number; adults?: number; children?: number; childAges?: number[]; hotelFacilityCodes?: string[]; roomFacilityCodes?: string[]; page?: number; pageSize?: number },
+    signal?: AbortSignal,
+  ) =>
+    request<HotelSearchPage>("/api/hotels/search", {
+      method: "POST",
+      body: JSON.stringify({ ...params, paginated: true }),
+      signal,
+    }),
+  getHotelFilters: (destinationId: string, language: "zh-CN" | "en-US") =>
+    request<HotelSearchFilters>("/api/hotels/filters", {
+      method: "POST",
+      body: JSON.stringify({ destinationId, language }),
     }),
   getHotelProducts: (offerId: string) =>
     request<HotelOffer[]>("/api/hotels/product-details", {
@@ -174,12 +191,27 @@ export const api = {
     children?: number;
     infants?: number;
     tripType?: 1 | 2 | 3;
-    journeys?: Array<{ origin: string; destination: string; date: string }>;
+    journeys?: Array<{
+      origin: string;
+      destination: string;
+      date: string;
+      originType: 1 | 2;
+      destinationType: 1 | 2;
+    }>;
   }) =>
     request<FlightOffer[]>("/api/flights/search", {
       method: "POST",
       body: JSON.stringify(params),
     }),
+  searchFlightDestinations: (
+    keyword: string,
+    locale: "zh-CN" | "zh-TW" | "en",
+    signal?: AbortSignal,
+  ) => request<FlightDestination[]>("/api/flights/destinations", {
+    method: "POST",
+    body: JSON.stringify({ keyword, locale }),
+    signal,
+  }),
   verifyFlight: (body: { offerId: string; priceKey: string; quantity: number }) =>
     request<{ verified: true; priceKey: string; totalAmount: number; currency: string; expiresAt: string }>("/api/flights/verify", {
       method: "POST",

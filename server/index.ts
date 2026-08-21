@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import type { DistributionOrder, FlightAddOns, HotelBasicInfo, HotelOffer, NationalityCatalog, OrderStatus, PaymentMethod } from "../src/types.js";
+import type { DistributionOrder, FlightAddOns, FlightDestination, HotelBasicInfo, HotelOffer, NationalityCatalog, OrderStatus, PaymentMethod } from "../src/types.js";
 import {
   applyFlinkChange,
   applyFlinkRefund,
@@ -22,12 +22,14 @@ import {
   GlinkNoProductError,
   hydrateGlinkProducts,
   listFlinkNationalities,
+  normalizeGlinkDestinations,
   queryGlinkLowestPrices,
   queryGlinkHotelBasicInfo,
   payFlinkOrder,
   payFlinkChange,
   refreshFlinkCabin,
   searchFlinkChangeOffers,
+  searchFlinkFlightDestinations,
   searchFlinkFlights,
   searchGlinkHotels,
   synchronizeHotelQuoteFromAvailability,
@@ -69,6 +71,20 @@ const hotelStayContexts = new Map<string, {
   nights: number;
 }>();
 const flightQuotes = new Map<string, FlightQuoteContext>();
+const mockFlightDestinationCatalog = [
+  { code: "SHA", zh: "上海", zhTw: "上海", en: "Shanghai", country: "China", aliases: ["上海市", "Shang Hai"] },
+  { code: "BJS", zh: "北京", zhTw: "北京", en: "Beijing", country: "China", aliases: ["北京市", "Peking"] },
+  { code: "CAN", zh: "广州", zhTw: "廣州", en: "Guangzhou", country: "China", aliases: ["广州市", "Canton"] },
+  { code: "SZX", zh: "深圳", zhTw: "深圳", en: "Shenzhen", country: "China", aliases: ["深圳市"] },
+  { code: "HKG", zh: "香港", zhTw: "香港", en: "Hong Kong", country: "China", aliases: ["香港特别行政区", "香港特別行政區", "Xianggang"] },
+  { code: "SIN", zh: "新加坡", zhTw: "新加坡", en: "Singapore", country: "Singapore", aliases: ["新加坡市"] },
+  { code: "BKK", zh: "曼谷", zhTw: "曼谷", en: "Bangkok", country: "Thailand", aliases: [] },
+  { code: "TYO", zh: "东京", zhTw: "東京", en: "Tokyo", country: "Japan", aliases: [] },
+  { code: "SEL", zh: "首尔", zhTw: "首爾", en: "Seoul", country: "South Korea", aliases: [] },
+  { code: "KUL", zh: "吉隆坡", zhTw: "吉隆坡", en: "Kuala Lumpur", country: "Malaysia", aliases: [] },
+  { code: "LON", zh: "伦敦", zhTw: "倫敦", en: "London", country: "United Kingdom", aliases: [] },
+  { code: "NYC", zh: "纽约", zhTw: "紐約", en: "New York", country: "United States", aliases: ["New York City"] },
+] as const;
 const nationalityCatalogCache = new Map<string, { expiresAt: number; value: NationalityCatalog }>();
 const flightChangeQuotes = new Map<string, {
   orderId: string;
@@ -669,6 +685,11 @@ app.post("/api/hotels/search", async (req, res) => {
     adults: z.number().int().min(1).max(16).default(2),
     children: z.number().int().min(0).max(8).default(0),
     childAges: z.array(z.number().int().min(0).max(17)).max(8).default([]),
+    hotelFacilityCodes: z.array(z.string().min(1).max(80)).max(30).default([]),
+    roomFacilityCodes: z.array(z.string().min(1).max(80)).max(30).default([]),
+    page: z.number().int().min(1).max(1000).default(1),
+    pageSize: z.number().int().min(1).max(10).default(10),
+    paginated: z.boolean().default(false),
   }).superRefine((value, context) => {
     if (value.checkIn < applicationDate()) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: "Check-in date cannot be earlier than today" });
@@ -686,7 +707,21 @@ app.post("/api/hotels/search", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Please fill in the complete search criteria" });
   if (useLocalHotelSimulation) {
     const nights = hotelNightCount(parsed.data.checkIn, parsed.data.checkOut);
-    return res.json(ok(database.listHotels(parsed.data.destination).map(offer => {
+    const localFacilityMatchers: Record<string, RegExp> = {
+      "free-parking": /free parking/i,
+      "fitness-center": /fitness center|gym/i,
+      "indoor-pool": /indoor pool|indoor swimming/i,
+      "river-view": /river view/i,
+      kitchen: /kitchen|kitchenette/i,
+    };
+    const selectedFacilityCodes = [...parsed.data.hotelFacilityCodes, ...parsed.data.roomFacilityCodes];
+    const allHotels = database.listHotels(parsed.data.destination).filter(hotel => {
+      const searchable = [...hotel.tags, hotel.roomName, hotel.breakfast].join(" ");
+      return selectedFacilityCodes.every(code => localFacilityMatchers[code]?.test(searchable) ?? true);
+    });
+    const start = (parsed.data.page - 1) * parsed.data.pageSize;
+    const pageHotels = allHotels.slice(start, start + parsed.data.pageSize);
+    const offers = pageHotels.map(offer => {
       const context = {
         checkInDate: parsed.data.checkIn,
         checkOutDate: parsed.data.checkOut,
@@ -703,27 +738,42 @@ app.post("/api/hotels/search", async (req, res) => {
         nightlyPrice: database.calculateSaleAmount("hotel", offer.nightlyPrice),
         totalPrice: database.calculateSaleAmount("hotel", offer.nightlyPrice * nights * parsed.data.rooms),
       };
-    })));
+    });
+    if (!parsed.data.paginated) return res.json(ok(offers));
+    const totalPages = Math.max(1, Math.ceil(allHotels.length / parsed.data.pageSize));
+    return res.json(ok({
+      items: offers,
+      currentPage: parsed.data.page,
+      pageSize: parsed.data.pageSize,
+      totalCount: allHotels.length,
+      totalPages,
+      hasMore: parsed.data.page < totalPages,
+    }));
   }
   const result = await searchGlinkHotels(runtime.glink, parsed.data);
   if (!result.diagnostics.saleableHotelCount) return res.status(409).json({
     code: "GLINK_CATALOG_EMPTY",
     message: "The current G-Link sandbox account has no mapped saleable hotels. Please ask the supplier to configure test hotels and inventory first.",
   });
-  if (!result.diagnostics.lowestPriceHotelCount && !result.offers.length) return res.status(409).json({
+  if (!result.diagnostics.lowestPriceHotelCount && !result.offers.length && parsed.data.page === 1) return res.status(409).json({
     code: "GLINK_LOWEST_PRICE_EMPTY",
     message: "Mapped hotels did not return daily lowest prices for the selected check-in date. The hotel list will not be displayed.",
   });
   result.quotes.forEach(quote => hotelQuotes.set(quote.id, quote));
-  return res.json(ok(result.offers.map(offer => ({
+  const offers = result.offers.map(offer => ({
     ...offer,
     nightlyPrice: database.calculateSaleAmount("hotel", offer.nightlyPrice),
     totalPrice: database.calculateSaleAmount("hotel", offer.totalPrice || offer.nightlyPrice),
-  }))));
+  }));
+  if (!parsed.data.paginated) return res.json(ok(offers));
+  return res.json(ok({ items: offers, ...result.pagination }));
 });
 
 app.post("/api/hotels/destination", async (req, res, next) => {
-  const parsed = z.object({ keyword: z.string().min(2) }).safeParse(req.body);
+  const parsed = z.object({
+    keyword: z.string().min(2),
+    language: z.enum(["zh-CN", "zh-TW", "en-US"]).default("zh-CN"),
+  }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Keyword must be at least 2 characters" });
   // Destination keyword lookup is a read-only metadata search. When G-Link
   // credentials are available we always call the real supplier, even in mock
@@ -735,18 +785,7 @@ app.post("/api/hotels/destination", async (req, res, next) => {
         keyWord: parsed.data.keyword,
         source: 1,
       });
-      const items = Array.isArray(raw) ? raw : [];
-      const destinations = items.map((item: any) => ({
-        name: item.destinationName || item.cityName || item.name || "",
-        detail: [item.countryName, item.provinceName].filter(Boolean).join(" · "),
-        cityCode: String(item.cityCode || ""),
-        destinationId: item.destinationId ? String(item.destinationId) : undefined,
-        destinationType: Number(item.destinationType || 0),
-        source: item.source === undefined ? undefined : Number(item.source),
-        hotelId: item.hotelId ? Number(item.hotelId) : undefined,
-        latGoogle: Number(item.latGoogle),
-        lngGoogle: Number(item.lngGoogle),
-      })).filter(d => Number.isFinite(d.latGoogle) && Number.isFinite(d.lngGoogle));
+      const destinations = normalizeGlinkDestinations(raw, parsed.data.language);
       const uniqueDestinations = destinations.filter((item, index, all) => all.findIndex(candidate =>
         candidate.name === item.name
         && candidate.latGoogle === item.latGoogle
@@ -766,20 +805,20 @@ app.post("/api/hotels/destination", async (req, res, next) => {
     }
   }
   const mockDestinations = [
-    { name: "London", detail: "United Kingdom · England", cityCode: "LON", destinationType: 8, latGoogle: 51.50746, lngGoogle: -0.127673 },
-    { name: "London", detail: "Canada · Ontario", cityCode: "YXU", destinationType: 8, latGoogle: 42.98695, lngGoogle: -81.243179 },
-    { name: "London", detail: "United States of America · Ohio", cityCode: "US-OH-LONDON", destinationType: 8, latGoogle: 39.886448, lngGoogle: -83.44825 },
-    { name: "New London", detail: "United States of America · Minnesota", cityCode: "US-MN-NEW-LONDON", destinationType: 8, latGoogle: 45.301075, lngGoogle: -94.944176 },
-    { name: "New London", detail: "United States of America · North Carolina", cityCode: "US-NC-NEW-LONDON", destinationType: 8, latGoogle: 35.443195, lngGoogle: -80.219223 },
-    { name: "East London", detail: "South Africa · Eastern Cape", cityCode: "ELS", destinationType: 8, latGoogle: -33.014809, lngGoogle: 27.903751 },
-    { name: "Little London", detail: "Jamaica · Westmoreland", cityCode: "JM-LITTLE-LONDON", destinationType: 8, latGoogle: 18.245424, lngGoogle: -78.214654 },
-    { name: "London Colney", detail: "England · St Albans", cityCode: "GB-LONDON-COLNEY", destinationType: 8, latGoogle: 51.721911, lngGoogle: -0.297422 },
-    { name: "Shanghai", detail: "China · Business & Leisure", cityCode: "SHA", destinationType: 8, latGoogle: 31.2304, lngGoogle: 121.4737 },
-    { name: "Hong Kong", detail: "Hong Kong, China · Harbor City", cityCode: "HKG", destinationType: 8, latGoogle: 22.3193, lngGoogle: 114.1694 },
-    { name: "Beijing", detail: "China · Historic Capital", cityCode: "BJS", destinationType: 8, latGoogle: 39.9042, lngGoogle: 116.4074 },
-    { name: "Shenzhen", detail: "China · Greater Bay Area", cityCode: "SZX", destinationType: 8, latGoogle: 22.5431, lngGoogle: 114.0579 },
-    { name: "深圳北站", detail: "中国 · 广东", cityCode: "SZX", destinationType: 8, latGoogle: 22.610332, lngGoogle: 114.030227 },
-    { name: "Bangkok", detail: "Thailand · Popular International Destination", cityCode: "BKK", destinationType: 8, latGoogle: 13.7563, lngGoogle: 100.5018 },
+    { name: "London", detail: "United Kingdom · England", cityCode: "LON", destinationType: 2, latGoogle: 51.50746, lngGoogle: -0.127673 },
+    { name: "London", detail: "Canada · Ontario", cityCode: "YXU", destinationType: 2, latGoogle: 42.98695, lngGoogle: -81.243179 },
+    { name: "London", detail: "United States of America · Ohio", cityCode: "US-OH-LONDON", destinationType: 2, latGoogle: 39.886448, lngGoogle: -83.44825 },
+    { name: "New London", detail: "United States of America · Minnesota", cityCode: "US-MN-NEW-LONDON", destinationType: 2, latGoogle: 45.301075, lngGoogle: -94.944176 },
+    { name: "New London", detail: "United States of America · North Carolina", cityCode: "US-NC-NEW-LONDON", destinationType: 2, latGoogle: 35.443195, lngGoogle: -80.219223 },
+    { name: "East London", detail: "South Africa · Eastern Cape", cityCode: "ELS", destinationType: 2, latGoogle: -33.014809, lngGoogle: 27.903751 },
+    { name: "Little London", detail: "Jamaica · Westmoreland", cityCode: "JM-LITTLE-LONDON", destinationType: 2, latGoogle: 18.245424, lngGoogle: -78.214654 },
+    { name: "London Colney", detail: "England · St Albans", cityCode: "GB-LONDON-COLNEY", destinationType: 2, latGoogle: 51.721911, lngGoogle: -0.297422 },
+    { name: "Shanghai", detail: "China · Business & Leisure", cityCode: "SHA", destinationType: 2, latGoogle: 31.2304, lngGoogle: 121.4737 },
+    { name: "Hong Kong", detail: "Hong Kong, China · Harbor City", cityCode: "HKG", destinationType: 2, latGoogle: 22.3193, lngGoogle: 114.1694 },
+    { name: "Beijing", detail: "China · Historic Capital", cityCode: "BJS", destinationType: 2, latGoogle: 39.9042, lngGoogle: 116.4074 },
+    { name: "Shenzhen", detail: "China · Greater Bay Area", cityCode: "SZX", destinationType: 2, latGoogle: 22.5431, lngGoogle: 114.0579 },
+    { name: "深圳北站", detail: "深圳，广东，中国", cityCode: "SZX", destinationType: 8, latGoogle: 22.610332, lngGoogle: 114.030227 },
+    { name: "Bangkok", detail: "Thailand · Popular International Destination", cityCode: "BKK", destinationType: 2, latGoogle: 13.7563, lngGoogle: 100.5018 },
   ];
   const normalized = parsed.data.keyword.trim().toLowerCase();
   const filtered = mockDestinations.filter(d => `${d.name}${d.detail}`.toLowerCase().includes(normalized));
@@ -849,11 +888,51 @@ app.post("/api/hotels/detail", async (req, res) => {
 });
 
 app.post("/api/hotels/filters", async (req, res) => {
-  const parsed = z.object({ destinationId: z.string().min(1) }).safeParse(req.body);
+  const parsed = z.object({
+    destinationId: z.string().min(1),
+    language: z.enum(["zh-CN", "en-US"]).default("en-US"),
+  }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Missing destination identifier" });
-  if (useLocalHotelSimulation) return res.json(ok({ stars: [3, 4, 5], facilities: ["Free Wi-Fi", "Parking", "Fitness Center"] }));
-  const filters = await runtime.glink.glink<unknown>("/search/hotelFilters", { destinationId: parsed.data.destinationId, language: "zh-CN", distance: 10 });
-  return res.json(ok(filters));
+  if (useLocalHotelSimulation) return res.json(ok({
+    hotelFacilities: [
+      { code: "free-parking", name: "Free Parking", count: database.listHotels().filter(hotel => hotel.tags.includes("Free Parking")).length },
+      { code: "fitness-center", name: "Fitness Center", count: database.listHotels().filter(hotel => hotel.tags.includes("Fitness Center")).length },
+      { code: "indoor-pool", name: "Indoor Pool", count: database.listHotels().filter(hotel => hotel.tags.includes("Indoor Pool")).length },
+    ],
+    roomAmenities: [
+      { code: "river-view", name: "River View", count: database.listHotels().filter(hotel => hotel.tags.includes("River View")).length },
+      { code: "kitchen", name: "Kitchen", count: database.listHotels().filter(hotel => /kitchen/i.test(hotel.roomName)).length },
+    ],
+  }));
+  const filters = await runtime.glink.glink<unknown>("/search/hotelFilters", {
+    destinationId: parsed.data.destinationId,
+    language: parsed.data.language,
+    distance: 10,
+  });
+  const result = z.object({
+    hotelFacilityList: z.array(z.object({
+      facilityCode: z.string(),
+      facilityName: z.string(),
+      facilityType: z.number().int().optional(),
+      count: z.union([z.number(), z.string()]),
+    })).default([]),
+    roomFacilityList: z.array(z.object({
+      facilityCode: z.string(),
+      facilityName: z.string(),
+      facilityType: z.number().int().optional(),
+      count: z.union([z.number(), z.string()]),
+    })).default([]),
+  }).passthrough().parse(filters);
+  const normalizeFacility = (facility: { facilityCode: string; facilityName: string; facilityType?: number; count: number | string }) => ({
+    code: facility.facilityCode,
+    name: facility.facilityName,
+    count: Number(facility.count) || 0,
+    ...(facility.facilityType !== undefined ? { facilityType: facility.facilityType } : {}),
+  });
+  return res.json(ok({
+    hotelFacilities: result.hotelFacilityList.map(normalizeFacility),
+    roomAmenities: result.roomFacilityList.map(normalizeFacility),
+  }));
 });
 
 app.post("/api/integration/glink/hotel-increment", async (req, res) => {
@@ -1016,6 +1095,38 @@ app.post("/api/hotels/availability", async (req, res) => {
   }));
 });
 
+app.post("/api/flights/destinations", async (req, res) => {
+  const parsed = z.object({
+    keyword: z.string().trim().min(1).max(80),
+    locale: z.enum(["zh-CN", "zh-TW", "en"]).default("zh-CN"),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Please enter a city, airport, or three-letter code" });
+
+  if (runtime.mode === "mock" || !runtime.flinkConfigured) {
+    const normalizedKeyword = parsed.data.keyword.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}]+/gu, "");
+    const matches: FlightDestination[] = mockFlightDestinationCatalog
+      .filter(item => [item.code, item.zh, item.zhTw, item.en, ...item.aliases]
+        .some(candidate => candidate.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}]+/gu, "").includes(normalizedKeyword)))
+      .map(item => {
+        const displayName = parsed.data.locale === "en" ? item.en : parsed.data.locale === "zh-TW" ? item.zhTw : item.zh;
+        return {
+          code: item.code,
+          type: 1 as const,
+          cityCode: item.code,
+          cityName: displayName,
+          country: item.country,
+          displayName,
+          detail: `${item.code} · ${item.country}`,
+        };
+      });
+    return res.json(ok(matches.slice(0, 12)));
+  }
+
+  const lang = parsed.data.locale === "en" ? "en" : parsed.data.locale === "zh-TW" ? "zh_TW" : "zh_CN";
+  const destinations = await searchFlinkFlightDestinations(runtime.flink, parsed.data.keyword, lang);
+  return res.json(ok(destinations.slice(0, 12)));
+});
+
 app.post("/api/flights/search", async (req, res) => {
   const parsed = z.object({
     from: z.string().trim().min(3),
@@ -1029,6 +1140,8 @@ app.post("/api/flights/search", async (req, res) => {
       origin: z.string().min(3),
       destination: z.string().min(3),
       date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      originType: z.union([z.literal(1), z.literal(2)]).default(1),
+      destinationType: z.union([z.literal(1), z.literal(2)]).default(1),
     })).min(1).max(4).optional(),
   }).superRefine((value, context) => {
     const journeys = value.journeys || [{ origin: value.from, destination: value.to, date: value.departureDate }];

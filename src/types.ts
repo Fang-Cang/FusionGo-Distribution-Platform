@@ -109,6 +109,7 @@ export interface HotelOffer {
   city: string;
   cityCode?: string;
   searchMatch?: "exact" | "nearby";
+  distanceKm?: number;
   district: string;
   rating?: number;
   ratingSource?: string;
@@ -140,6 +141,27 @@ export interface HotelOffer {
   nights?: number;
   totalPrice?: number;
   maxRoomCount?: number;
+}
+
+export interface HotelSearchPage {
+  items: HotelOffer[];
+  currentPage: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+  hasMore: boolean;
+}
+
+export interface HotelSearchFilterItem {
+  code: string;
+  name: string;
+  count: number;
+  facilityType?: number;
+}
+
+export interface HotelSearchFilters {
+  hotelFacilities: HotelSearchFilterItem[];
+  roomAmenities: HotelSearchFilterItem[];
 }
 
 export interface HotelBasicInfo {
@@ -207,6 +229,18 @@ export interface FlightOffer {
   childNum?: number;
   infantNum?: number;
   journeys?: FlightJourneySummary[];
+}
+
+export interface FlightDestination {
+  code: string;
+  type: 1 | 2;
+  cityCode: string;
+  cityName: string;
+  airportCode?: string;
+  airportName?: string;
+  country: string;
+  displayName: string;
+  detail: string;
 }
 
 export interface FlightJourneySummary {

@@ -8,15 +8,15 @@
 2. 氛围层：局部深色渐变 scrim，保证标题与控件对比度稳定。
 3. 深色主玻璃：浮动胶囊导航、产品分段选择、搜索台。
 4. 嵌套控制：使用更密的半透明填充，不重复使用 `backdrop-filter`。
-5. 激活材料：indigo/violet 用于选择、焦点、链接与主要 CTA。
+5. 激活材料：黑色与中性灰用于选择、焦点、链接与主要 CTA。
 6. 浅色浮层：目的地联想、旅客选择、联系人和订单确认。
 
 ## 主要令牌
 
 | 令牌 | 当前值 |
 |---|---|
-| Accent | `#5b55f6` |
-| Accent hover | `#4b46e5` |
+| Accent | `#000000` |
+| Accent hover | `#333333` |
 | Dark ink | `#10172a` |
 | Dark glass | `rgba(13, 18, 31, .58)` |
 | Light glass | `rgba(246, 248, 252, .82)` |
@@ -31,8 +31,8 @@
 ## 状态与可访问性
 
 - Hover：提高边缘亮度和表面密度，并保持轻微位移。
-- Focus：使用 2px violet 焦点环及 offset。
-- Active：使用饱和 violet 填充和更强的文字对比。
+- Focus：使用 2px 黑色焦点环及 offset；深色背景改用白色环保证对比度。
+- Active：使用黑色填充和更强的文字对比。
 - Disabled：降低表面对比，保留可读标签，不只调整透明度。
 - Loading：保持按钮几何尺寸并显示旋转进度。
 - Error：红色边缘、独立错误文案及 `role="alert"`。
@@ -53,4 +53,3 @@
 - `prefers-reduced-motion: reduce` 下关闭非必要动画与平滑滚动。
 - `prefers-contrast: more` 下加密表面并提高边界、文字对比。
 - `forced-colors: active` 下交还系统配色并保留清晰边框。
-
