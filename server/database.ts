@@ -17,6 +17,7 @@ import {
 } from "./mock-data.js";
 
 const DEFAULT_TENANT_ID = "tenant-demo";
+const DEFAULT_TENANT_NAME = process.env.TENANT_NAME?.trim() || "FusionGo";
 const migrationUrl = (name: string) => {
   const bundled = new URL(`./db/migrations/${name}`, import.meta.url);
   return existsSync(bundled)
@@ -36,6 +37,7 @@ const migration010 = readFileSync(migrationUrl("010_hotel_favorites.sql"), "utf8
 const migration011 = readFileSync(migrationUrl("011_local_user_auth.sql"), "utf8");
 const migration012 = readFileSync(migrationUrl("012_order_user_isolation.sql"), "utf8");
 const migration013 = readFileSync(migrationUrl("013_destination_cache.sql"), "utf8");
+const migration014 = readFileSync(migrationUrl("014_remove_runtime_demo_data.sql"), "utf8");
 
 type SqlValue = string | number | bigint | null | Uint8Array;
 type SqlParams = SqlValue[];
@@ -240,7 +242,10 @@ const verifyPassword = (password: string, encoded: string) => {
 };
 const hashSessionToken = (token: string) => createHash("sha256").update(token).digest("hex");
 const localPiiSecret = process.env.PII_ENCRYPTION_KEY
-  || "fusiongo-local-development-only-not-for-production";
+  || (process.env.NODE_ENV === "test" ? "fusiongo-automated-test-pii-key-32chars" : "");
+if (localPiiSecret.length < 32) {
+  throw new Error("PII_ENCRYPTION_KEY must be configured with at least 32 characters");
+}
 const localPiiKey = createHash("sha256").update(localPiiSecret).digest();
 const encryptPii = (value: string) => {
   const iv = randomBytes(12);
@@ -372,6 +377,7 @@ export class FusionDatabase {
       { version: 11, name: "011_local_user_auth", sql: migration011 },
       { version: 12, name: "012_order_user_isolation", sql: migration012 },
       { version: 13, name: "013_destination_cache", sql: migration013 },
+      { version: 14, name: "014_remove_runtime_demo_data", sql: migration014 },
     ];
     migrations.forEach(migration => {
       const current = this.db.prepare(
@@ -434,6 +440,10 @@ export class FusionDatabase {
     const columnCheck = this.db.prepare("PRAGMA table_info(orders)").all() as Array<{ name: string }>;
     const hasUserId = columnCheck.some(col => col.name === "user_id");
     if (!hasUserId) return;
+    const demoUserExists = this.db.prepare(
+      "SELECT 1 AS present FROM user_profiles WHERE id = 'user-demo'",
+    ).get();
+    if (!demoUserExists) return;
 
     const unassignedCount = this.db.prepare(
       "SELECT COUNT(*) as count FROM orders WHERE user_id IS NULL",
@@ -449,7 +459,10 @@ export class FusionDatabase {
       this.db.prepare(`
         INSERT OR IGNORE INTO tenants(id, name, status, default_currency, created_at)
         VALUES (?, ?, 'ACTIVE', 'CNY', ?)
-      `).run(DEFAULT_TENANT_ID, "Universal Travel", createdAt);
+      `).run(DEFAULT_TENANT_ID, DEFAULT_TENANT_NAME, createdAt);
+      this.db.prepare("UPDATE tenants SET name = ? WHERE id = ?").run(DEFAULT_TENANT_NAME, DEFAULT_TENANT_ID);
+
+      if (!includeDemoSupplierData) return;
 
       this.db.prepare(`
         INSERT OR IGNORE INTO user_profiles(

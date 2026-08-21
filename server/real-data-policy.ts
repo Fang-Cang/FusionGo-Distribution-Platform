@@ -1,12 +1,8 @@
 export const simulatedSupplierDataAllowed = (
   nodeEnvironment = process.env.NODE_ENV,
-  fcgMode = process.env.FCG_MODE,
-  simulationFlag = process.env.FCG_SANDBOX_HOTEL_SIMULATION,
-) =>
-  // vitest automated tests
-  nodeEnvironment === "test"
-  // Sandbox explicit simulation fallback (for running UI before real FCG credentials are available)
-  || (fcgMode === "sandbox" && simulationFlag === "true");
+  _fcgMode = process.env.FCG_MODE,
+  _simulationFlag = process.env.FCG_SANDBOX_HOTEL_SIMULATION,
+) => nodeEnvironment === "test";
 
 export const localHotelSimulationAllowed = (
   mode: "mock" | "sandbox" | "production",

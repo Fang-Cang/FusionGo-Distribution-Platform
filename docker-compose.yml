@@ -22,14 +22,13 @@ services:
       FCG_GLINK_APP_SECRET: ${FCG_GLINK_APP_SECRET:-}
       FCG_FLINK_APP_KEY: ${FCG_FLINK_APP_KEY:-}
       FCG_FLINK_APP_SECRET: ${FCG_FLINK_APP_SECRET:-}
-      # 暂无真实凭证时，开启 sandbox 模拟兜底，使 UI 与预订流程可正常演示；
-      # 拿到真实凭证后请在 .env 中覆盖为 false。
-      FCG_SANDBOX_HOTEL_SIMULATION: ${FCG_SANDBOX_HOTEL_SIMULATION:-true}
+      # test/sandbox 部署不允许模拟供应商库存。
+      FCG_SANDBOX_HOTEL_SIMULATION: ${FCG_SANDBOX_HOTEL_SIMULATION:-false}
       # === 基础配置 ===
       PORT: ${PORT:-8787}
       DATABASE_PATH: ${DATABASE_PATH:-/data/fusiongo-sandbox.sqlite}
-      # 本地兜底：32+ 位随机密钥；生产必须由密钥管理服务注入。
-      PII_ENCRYPTION_KEY: ${PII_ENCRYPTION_KEY:-sandbox-pii-encryption-key-32chars-min}
+      # 必须由部署环境注入，不在代码中提供固定兜底密钥。
+      PII_ENCRYPTION_KEY: ${PII_ENCRYPTION_KEY:-}
       # === 以下为生产准入项，sandbox 可留空 ===
       PUBLIC_APP_URL: ${PUBLIC_APP_URL:-https://obttest.mongoso.vip}
       WEBHOOK_PUBLIC_URL: ${WEBHOOK_PUBLIC_URL:-}

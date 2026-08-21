@@ -229,7 +229,7 @@ describe("global functional smoke gate", () => {
     const health = await call<{ status: string; database: { migrationVersion: number } }>("/api/health");
     const ready = await call<{ ready: boolean }>("/api/ready");
     expect(health.response.status).toBe(200);
-    expect(health.body.data).toMatchObject({ status: "up", database: { migrationVersion: 13 } });
+    expect(health.body.data).toMatchObject({ status: "up", database: { migrationVersion: 14 } });
     expect(ready.body.data.ready).toBe(true);
   });
 

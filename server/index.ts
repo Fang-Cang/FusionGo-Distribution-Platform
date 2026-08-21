@@ -258,7 +258,7 @@ const authMode = process.env.AUTH_MODE === "external" ? "external" as const : "l
 const authUserId = (req: express.Request) => {
   if (runtime.mode === "production") return undefined;
   const token = readCookie(req.headers.cookie, AUTH_COOKIE);
-  if (token === "local-user") return "user-demo";
+  if (token === "local-user") return process.env.NODE_ENV === "test" ? "user-demo" : undefined;
   return token && token !== "guest" ? database.resolveLocalAuthSession(token) : undefined;
 };
 const isAuthenticated = (req: express.Request) => {
@@ -335,6 +335,9 @@ app.post("/api/auth/login", (req, res) => {
     });
   }
   const parsed = z.object({ email: z.string().email(), password: z.string().min(8).max(72) }).safeParse(req.body || {});
+  if (!parsed.success && process.env.NODE_ENV !== "test") {
+    return res.status(400).json({ code: "INVALID_CREDENTIALS", message: "Email and password are required" });
+  }
   const userId = parsed.success
     ? database.authenticateLocalAccount(parsed.data.email, parsed.data.password)
     : "user-demo";
@@ -778,9 +781,8 @@ app.post("/api/hotels/destination", async (req, res, next) => {
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Keyword must be at least 2 characters" });
   // Destination keyword lookup is a read-only metadata search. When G-Link
-  // credentials are available we always call the real supplier, even in mock
-  // mode, so the UI can browse the real destination index. The mock list is
-  // only a fallback when no credentials are configured.
+  // Credentials are required in every deployed environment. Fixed destination
+  // fixtures remain reachable only from isolated automated tests.
   if (runtime.glinkConfigured) {
     try {
       const raw = await runtime.glink.glink<unknown>("/search/destination", {
@@ -805,6 +807,12 @@ app.post("/api/hotels/destination", async (req, res, next) => {
       next(error);
       return;
     }
+  }
+  if (runtime.mode !== "mock" || process.env.NODE_ENV !== "test") {
+    return res.status(503).json({
+      code: "GLINK_NOT_CONFIGURED",
+      message: "G-Link credentials are required; test environment does not provide mock destination data",
+    });
   }
   const mockDestinations = [
     { name: "London", detail: "United Kingdom · England", cityCode: "LON", destinationType: 2, latGoogle: 51.50746, lngGoogle: -0.127673 },
@@ -1104,7 +1112,7 @@ app.post("/api/flights/destinations", async (req, res) => {
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Please enter a city, airport, or three-letter code" });
 
-  if (runtime.mode === "mock" || !runtime.flinkConfigured) {
+  if (runtime.mode === "mock" && process.env.NODE_ENV === "test") {
     const normalizedKeyword = parsed.data.keyword.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}]+/gu, "");
     const matches: FlightDestination[] = mockFlightDestinationCatalog
       .filter(item => [item.code, item.zh, item.zhTw, item.en, ...item.aliases]
@@ -1122,6 +1130,13 @@ app.post("/api/flights/destinations", async (req, res) => {
         };
       });
     return res.json(ok(matches.slice(0, 12)));
+  }
+
+  if (!runtime.flinkConfigured) {
+    return res.status(503).json({
+      code: "FLINK_NOT_CONFIGURED",
+      message: "F-Link credentials are required; test environment does not provide mock destination data",
+    });
   }
 
   const lang = parsed.data.locale === "en" ? "en" : parsed.data.locale === "zh-TW" ? "zh_TW" : "zh_CN";

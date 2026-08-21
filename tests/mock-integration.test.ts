@@ -382,7 +382,7 @@ describe("database and webhook observability", () => {
       counts: { orders: number; payments: number };
     }>("/api/database/status");
     expect(status.body.data.driver).toBe("sqlite");
-    expect(status.body.data.migrationVersion).toBe(13);
+    expect(status.body.data.migrationVersion).toBe(14);
     expect(status.body.data.counts.orders).toBeGreaterThan(5);
     expect(status.body.data.counts.payments).toBeGreaterThanOrEqual(2);
 

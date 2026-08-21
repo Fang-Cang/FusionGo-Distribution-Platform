@@ -90,7 +90,7 @@ describe("FusionDatabase persistence", () => {
       givenName: "MINGYU",
       documentNo: "P9•••••66",
     });
-    expect(reopened.status().migrationVersion).toBe(13);
+    expect(reopened.status().migrationVersion).toBe(14);
     reopened.close();
   });
 
@@ -99,6 +99,20 @@ describe("FusionDatabase persistence", () => {
     database.seed(true);
     expect(database.listHotels("Shanghai")).toHaveLength(3);
     expect(database.listHotels("Shenzhen")).toEqual([]);
+    database.close();
+  });
+
+  it("does not seed demo commerce or identity records for deployed runtimes", () => {
+    const database = new FusionDatabase(":memory:");
+    database.seed(false);
+
+    expect(database.listHotels()).toEqual([]);
+    expect(database.listFlights()).toEqual([]);
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM orders").get()).toEqual({ count: 0 });
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM user_profiles").get()).toEqual({ count: 0 });
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM account_travelers").get()).toEqual({ count: 0 });
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM customers").get()).toEqual({ count: 0 });
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM pricing_rules").get()).toEqual({ count: 0 });
     database.close();
   });
 

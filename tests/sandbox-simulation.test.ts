@@ -9,6 +9,8 @@ process.env.FCG_APP_KEY = "";
 process.env.FCG_APP_SECRET = "";
 process.env.FCG_GLINK_APP_KEY = "";
 process.env.FCG_GLINK_APP_SECRET = "";
+process.env.FCG_FLINK_APP_KEY = "";
+process.env.FCG_FLINK_APP_SECRET = "";
 process.env.DATABASE_PATH = ":memory:";
 process.env.APP_TEST_DATE = "2026-08-11";
 
@@ -31,42 +33,29 @@ afterAll(async () => {
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 });
 
-describe("credential-free sandbox hotel simulation", () => {
-  it("returns the London destination choices used by the autocomplete", async () => {
+describe("credential-free sandbox behavior", () => {
+  it("does not return fixed London destination data without G-Link credentials", async () => {
     const response = await fetch(`${baseUrl}/api/hotels/destination`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ keyword: "London" }),
     });
-    const body = await response.json() as { code: string; data: Array<{ name: string; detail: string; latGoogle: number; lngGoogle: number }> };
+    const body = await response.json() as { code: string };
 
-    expect(response.status).toBe(200);
-    expect(body.data).toHaveLength(8);
-    expect(body.data).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "London", detail: "United Kingdom · England" }),
-      expect.objectContaining({ name: "East London", detail: "South Africa · Eastern Cape" }),
-      expect.objectContaining({ name: "London Colney", detail: "England · St Albans" }),
-    ]));
-    expect(new Set(body.data.map(item => `${item.latGoogle},${item.lngGoogle}`)).size).toBe(8);
+    expect(response.status).toBe(503);
+    expect(body.code).toBe("GLINK_NOT_CONFIGURED");
   });
 
-  it("returns Shenzhen North Railway Station as an exact destination suggestion", async () => {
-    const response = await fetch(`${baseUrl}/api/hotels/destination`, {
+  it("does not return fixed flight destinations without F-Link credentials", async () => {
+    const response = await fetch(`${baseUrl}/api/flights/destinations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keyword: "深圳北站" }),
+      body: JSON.stringify({ keyword: "Shanghai" }),
     });
-    const body = await response.json() as { data: Array<{ name: string; cityCode: string; destinationType: number; latGoogle: number; lngGoogle: number }> };
+    const body = await response.json() as { code: string };
 
-    expect(response.status).toBe(200);
-    expect(body.data[0]).toEqual({
-      name: "深圳北站",
-      detail: "深圳，广东，中国",
-      cityCode: "SZX",
-      destinationType: 8,
-      latGoogle: 22.610332,
-      lngGoogle: 114.030227,
-    });
+    expect(response.status).toBe(503);
+    expect(body.code).toBe("FLINK_NOT_CONFIGURED");
   });
 
   it("searches local test hotels instead of calling an unconfigured FCG client", async () => {
