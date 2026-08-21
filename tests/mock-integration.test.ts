@@ -6,6 +6,7 @@ import type { DistributionOrder, FlightOffer, HotelOffer } from "../src/types.js
 process.env.FCG_MODE = "mock";
 process.env.FCG_ENV = "test";
 process.env.DATABASE_PATH = ":memory:";
+process.env.APP_TEST_DATE = "2026-08-11";
 
 let server: Server;
 let baseUrl = "";

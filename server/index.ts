@@ -108,6 +108,8 @@ const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
   .map(value => value.trim())
   .filter(Boolean);
 const applicationDate = () => {
+  const testDate = process.env.NODE_ENV === "test" ? process.env.APP_TEST_DATE : undefined;
+  if (testDate && /^\d{4}-\d{2}-\d{2}$/.test(testDate)) return testDate;
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: process.env.APP_TIME_ZONE || "Asia/Shanghai",
     year: "numeric",

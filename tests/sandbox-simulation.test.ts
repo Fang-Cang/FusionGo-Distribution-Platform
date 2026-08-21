@@ -10,6 +10,7 @@ process.env.FCG_APP_SECRET = "";
 process.env.FCG_GLINK_APP_KEY = "";
 process.env.FCG_GLINK_APP_SECRET = "";
 process.env.DATABASE_PATH = ":memory:";
+process.env.APP_TEST_DATE = "2026-08-11";
 
 let server: Server;
 let baseUrl = "";
@@ -60,7 +61,7 @@ describe("credential-free sandbox hotel simulation", () => {
     expect(response.status).toBe(200);
     expect(body.data[0]).toEqual({
       name: "深圳北站",
-      detail: "中国 · 广东",
+      detail: "深圳，广东，中国",
       cityCode: "SZX",
       destinationType: 8,
       latGoogle: 22.610332,

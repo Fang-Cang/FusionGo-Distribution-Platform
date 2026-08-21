@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 process.env.FCG_MODE = "mock";
 process.env.FCG_ENV = "smoke";
 process.env.DATABASE_PATH = ":memory:";
+process.env.APP_TEST_DATE = "2026-08-11";
 
 let server: Server;
 let baseUrl = "";
