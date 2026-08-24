@@ -100,6 +100,22 @@ export interface FlightAddOns {
   insurance: boolean;
 }
 
+export interface HotelCancellationPenalty {
+  penaltiesType?: number;
+  startDate?: string;
+  endDate?: string;
+  penaltiesValue?: string;
+  currency?: string;
+}
+
+export interface HotelCancellationPolicyDetails {
+  cancelRestrictionType?: number;
+  cancelRestrictionDay?: number;
+  cancelRestrictionTime?: string;
+  freeCancellationDateTime?: string;
+  cancelPenalties: HotelCancellationPenalty[];
+}
+
 export interface HotelOffer {
   id: string;
   hotelId?: number | string;
@@ -114,15 +130,21 @@ export interface HotelOffer {
   rating?: number;
   ratingSource?: string;
   stars?: number;
+  starCode?: number;
+  starDescription?: string;
   image?: string;
   tags: string[];
   roomName: string;
   ratePlanName?: string;
   breakfast: string;
+  breakfastIncluded?: boolean;
   cancelPolicy: string;
+  cancellationPolicyDetails?: HotelCancellationPolicyDetails;
   bedTypeDescription?: string;
+  windowType?: number;
   nonRefundable?: boolean;
   cancelRestrictionType?: number;
+  freeCancellation?: boolean;
   checkInInstructions?: string;
   specialCheckInInstructions?: string[];
   payAtHotel?: boolean;
@@ -164,6 +186,36 @@ export interface HotelSearchFilters {
   roomAmenities: HotelSearchFilterItem[];
 }
 
+export const HOTEL_POPULAR_FACILITY_CODES = [
+  "shuttleService",
+  "freeBreakfast",
+  "petFriendly",
+  "chargingStation",
+  "meetingRoom",
+  "laundryFacilities",
+  "restaurant",
+  "swimmingPool",
+  "freeWiFi",
+  "luggageStorage",
+  "bar",
+  "has24HourFrontDesk",
+  "fitnessCenter",
+  "parkingLot",
+  "currencyExchange",
+  "spaAndWellnessCenter",
+] as const;
+
+export type HotelPopularFacilityCode = typeof HOTEL_POPULAR_FACILITY_CODES[number];
+
+export interface HotelRoomInfo {
+  roomId: number | string;
+  smokingPolicy?: number;
+  roomArea?: string;
+  roomFloor?: string;
+  windowType?: number;
+  wirelessBroadband?: number;
+}
+
 export interface HotelBasicInfo {
   hotelId: number | string;
   name: string;
@@ -171,13 +223,20 @@ export interface HotelBasicInfo {
   district: string;
   address?: string;
   phone?: string;
+  openingDate?: string;
+  renovatedDate?: string;
+  numberOfRooms?: number;
   stars?: number;
+  starCode?: number;
+  starDescription?: string;
   rating?: number;
   ratingSource?: string;
   introduction?: string;
   checkInTime?: string;
   checkInLateTime?: string;
   checkOutTime?: string;
+  popularFacilities?: HotelPopularFacilityCode[];
+  rooms?: HotelRoomInfo[];
   facilities: string[];
   images: string[];
   importantNotices: string[];

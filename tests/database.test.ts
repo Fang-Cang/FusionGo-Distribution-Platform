@@ -102,6 +102,27 @@ describe("FusionDatabase persistence", () => {
     database.close();
   });
 
+  it("persists mapped G-Link hotel-star metadata in favorite snapshots", () => {
+    const database = new FusionDatabase(":memory:");
+    database.seed(true);
+    const hotel = database.findHotel("HTL-SHA-001")!;
+    database.addFavoriteHotel({
+      ...hotel,
+      inventorySource: "glink",
+      starCode: 19,
+      stars: 5,
+      starDescription: "五星级",
+    });
+
+    expect(database.listFavoriteHotels()[0]).toMatchObject({
+      id: hotel.id,
+      starCode: 19,
+      stars: 5,
+      starDescription: "五星级",
+    });
+    database.close();
+  });
+
   it("does not seed demo commerce or identity records for deployed runtimes", () => {
     const database = new FusionDatabase(":memory:");
     database.seed(false);

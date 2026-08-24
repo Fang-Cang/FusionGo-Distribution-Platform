@@ -6,7 +6,9 @@ import {
   hydrateGlinkProduct,
   hydrateGlinkProducts,
   normalizeGlinkHotelStars,
+  normalizeGlinkPopularFacilities,
   normalizeGlinkDestinations,
+  resolveGlinkHotelStar,
   queryGlinkHotelBasicInfo,
   searchGlinkHotels,
   synchronizeHotelQuoteFromAvailability,
@@ -116,15 +118,34 @@ describe("G-Link mandatory hotel workflow", () => {
     expect(normalizeGlinkHotelStars(upstream)).toBe(expected);
   });
 
+  it.each([
+    [19, 5, "五星级"], [29, 5, "五星级"], [39, 4, "四星级"], [49, 4, "四星级"],
+    [59, 3, "三星级"], [64, 3, "三星级"], [69, 2, "二星级"], [66, 2, "二星级"], [79, 2, "二星级"],
+  ])("stores Open Platform hotel-star mapping %i as %i / %s", (starCode, stars, starDescription) => {
+    expect(resolveGlinkHotelStar(starCode)).toEqual({ starCode, stars, starDescription });
+  });
+
+  it("maps enabled G-Link popular facilities in FusionGo display order", () => {
+    expect(normalizeGlinkPopularFacilities({
+      spaAndWellnessCenter: "1",
+      shuttleService: "1",
+      freeBreakfast: "0",
+      has24HourFrontDesk: "1",
+      restaurant: "1",
+      swimmingPool: "0",
+    })).toEqual(["shuttleService", "restaurant", "has24HourFrontDesk", "spaAndWellnessCenter"]);
+  });
+
   it("maps hotel basic information and images for the detail page", async () => {
     const { client, calls } = stubClient({
-      "/hotel/detail": { hotelInfos: [{ hotelId: 10583772, hotelName: "深圳真实酒店", cityName: "深圳", distinctName: "南山区", address: "测试路 1 号", hotelStar: "5星", hotelIntroduce: "<p>酒店简介</p>", checkInTime: "14:00", checkOutTime: "12:00", comment: [{ averageScore: "4.6", source: "G-Link" }], facility: [{ categoryType: "1", status: 1, name: "健身中心" }], importantNotices: [{ informText: "入住须知" }] }] },
+      "/hotel/detail": { hotelInfos: [{ hotelId: 10583772, hotelName: "深圳真实酒店", cityName: "深圳", distinctName: "南山区", address: "测试路 1 号", telephone: "+86-755-88888888", openingDate: "2018-06-01", fitmentDate: "2023-01-15", roomNum: 445, hotelStar: "5星", hotelIntroduce: "<p>酒店简介</p>", checkInTime: "14:00", checkOutTime: "12:00", comment: [{ averageScore: "4.6", source: "G-Link" }], popularFacility: { freeWiFi: "1", parkingLot: "1", bar: "0" }, facility: [{ categoryType: "1", status: 1, name: "健身中心" }], roomInfos: [{ roomId: 52047428, isAllowSmoking: 2, roomAcreage: "45", roomFloor: "1", windowDetail: 2, wirelessBroadband: 2 }], importantNotices: [{ informText: "入住须知" }] }] },
       "/hotel/images": { hotelImages: [{ hotelId: 10583772, images: [{ isMain: 1, url: "http://example.com/main.jpg" }] }] },
     });
 
-    const detail = await queryGlinkHotelBasicInfo(client, 10583772);
-    expect(detail).toMatchObject({ name: "深圳真实酒店", address: "测试路 1 号", stars: 5, rating: 4.6, facilities: ["健身中心"], images: ["https://example.com/main.jpg"] });
+    const detail = await queryGlinkHotelBasicInfo(client, 10583772, "en-US");
+    expect(detail).toMatchObject({ name: "深圳真实酒店", address: "测试路 1 号", phone: "+86-755-88888888", openingDate: "2018-06-01", renovatedDate: "2023-01-15", numberOfRooms: 445, stars: 5, rating: 4.6, popularFacilities: ["freeWiFi", "parkingLot"], rooms: [{ roomId: 52047428, smokingPolicy: 2, roomArea: "45", roomFloor: "1", windowType: 2, wirelessBroadband: 2 }], facilities: ["健身中心"], images: ["https://example.com/main.jpg"] });
     expect(detail.introduction).toBe("酒店简介");
+    expect(calls.find(call => call.path === "/hotel/detail")?.body.language).toBe("en-US");
     expect(calls.map(call => call.path)).toEqual(["/hotel/detail", "/hotel/images"]);
   });
 
@@ -503,7 +524,10 @@ describe("G-Link mandatory hotel workflow", () => {
     }, "OP-1");
 
     const availabilityCall = calls.find(call => call.path === "/booking/availabilityCheck")!;
+    const productCall = calls.find(call => call.path === "/booking/productDetails")!;
     const createCall = calls.find(call => call.path === "/booking/createOrder")!;
+    expect(productCall.body.language).toBe("en-US");
+    expect(availabilityCall.body.language).toBe("en-US");
     expect(availabilityCall.body.roomNum).toBe(2);
     expect(createCall.body.roomNum).toBe(2);
     expect(createCall.body.totalAmount).toBe(600);
@@ -548,9 +572,11 @@ describe("G-Link mandatory hotel workflow", () => {
     const payAtHotelStub = stubClient({ "/booking/productDetails": productResponse });
     const payAtHotel = await hydrateGlinkProduct(payAtHotelStub.client, baseQuote, {
       paymentType: "payAtHotel",
+      language: "zh-CN",
     });
     expect(payAtHotel.quote.ratePlanId).toBe("pay-at-hotel");
     expect(payAtHotel.quote.payAtHotelFlag).toBe(1);
+    expect(payAtHotelStub.calls[0]?.body.language).toBe("zh-CN");
   });
 
   it("returns every distinct bookable room and rate-plan product", async () => {
@@ -598,6 +624,7 @@ describe("G-Link mandatory hotel workflow", () => {
             supplyCode: "EPS-SUPPLIER",
             payAtHotelFlag: 0,
             cancelRestrictionType: 1,
+            windowType: 2,
             bedTypeDetails: [{
               bedInfos: [{ bedTypeName: "King Bed", bedNum: 1, bedTypeCode: "KING" }],
             }],
@@ -620,9 +647,14 @@ describe("G-Link mandatory hotel workflow", () => {
 
     expect(hydrated.offer).toMatchObject({
       bedTypeDescription: "King Bed",
+      windowType: 2,
       nonRefundable: true,
       cancelRestrictionType: 1,
       cancelPolicy: "不可取消、不可更改",
+      cancellationPolicyDetails: {
+        cancelRestrictionType: 1,
+        cancelPenalties: [],
+      },
       checkInInstructions: "办理入住：15:00–23:00",
       specialCheckInInstructions: ["请携带护照原件", "入住提示"],
       payAtHotel: false,

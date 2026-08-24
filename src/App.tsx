@@ -3,9 +3,11 @@ import {
   ArrowRight,
   AlertTriangle,
   BadgePercent,
+  BatteryCharging,
   BedDouble,
   Bell,
   Building2,
+  BusFront,
   CalendarDays,
   ChartNoAxesCombined,
   Check,
@@ -13,9 +15,17 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleDollarSign,
   CircleHelp,
+  CircleParking,
+  Cigarette,
+  CigaretteOff,
   Clock3,
+  Coffee,
+  ConciergeBell,
+  Copy,
   CreditCard,
+  Dumbbell,
   Eye,
   EyeOff,
   FileText,
@@ -23,6 +33,7 @@ import {
   Gift,
   Heart,
   ImageOff,
+  Images,
   Landmark,
   LoaderCircle,
   LayoutDashboard,
@@ -32,25 +43,39 @@ import {
   Luggage,
   Mail,
   MapPin,
+  Maximize2,
   Minus,
+  PawPrint,
+  PanelTopOpen,
   Plane,
   Phone,
   Plus,
+  Presentation,
   ReceiptText,
   RefreshCw,
   Search,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
   TicketCheck,
   UserRound,
   Users,
+  Utensils,
   WalletCards,
+  WashingMachine,
+  Waves,
+  Wifi,
+  Wine,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { convertDisplayAmount, formatCurrencyAmount, formatDisplayAmount } from "./currency";
 import { resolveHotelDateRangeSelection } from "./hotel-date-range";
+import { buildHotelCancellationPolicy, buildHotelCancellationSummary } from "./hotel-cancellation-policy";
+import { hotelProductTypeTitle } from "./hotel-product-type";
+import { findFavoriteHotel, isSameHotel } from "./hotel-favorite";
 import type {
   AccountProfile,
   AccountTraveler,
@@ -66,7 +91,9 @@ import type {
   FlightOffer,
   FavoriteHotel,
   HotelOffer,
+  HotelPopularFacilityCode,
   HotelBasicInfo,
+  HotelRoomInfo,
   HotelSearchFilters,
   NationalityCatalog,
   NationalityOption,
@@ -90,6 +117,7 @@ type Page =
 type LocaleCode = "zh-CN" | "zh-TW" | "en";
 type TripType = "oneway" | "roundtrip" | "multicity";
 type PersonNameParts = { surname: string; givenName: string };
+type HotelStayQuery = { checkIn: string; checkOut: string; rooms: number; adults: number; children: number; childAges: number[] };
 type OrderProductFilter = "all" | "hotel" | "flight";
 type OrderStatusFilter = "all" | "pending" | "confirmed" | "aftersales" | OrderStatus;
 type OrderDatePreset = "all" | "today" | "7d" | "30d" | "custom";
@@ -149,6 +177,44 @@ const ROOM_AMENITY_FILTERS: HotelAttributeFilterOption[] = [
   { key: "refrigerator", label: "Refrigerator", matches: hotel => includesHotelAttribute(hotel, ["refrigerator", "fridge", "冰箱"]) },
   { key: "river-view", label: "River View", matches: hotel => includesHotelAttribute(hotel, ["river view", "river-view", "江景", "河景"]) },
 ];
+
+const POPULAR_HOTEL_FACILITY_LABELS: Record<HotelPopularFacilityCode, Record<LocaleCode, string>> = {
+  shuttleService: { "zh-CN": "接驳服务", "zh-TW": "接駁服務", en: "Shuttle Service" },
+  freeBreakfast: { "zh-CN": "免费早餐", "zh-TW": "免費早餐", en: "Free Breakfast" },
+  petFriendly: { "zh-CN": "宠物友好", "zh-TW": "寵物友善", en: "Pet Friendly" },
+  chargingStation: { "zh-CN": "充电站", "zh-TW": "充電站", en: "Charging Station" },
+  meetingRoom: { "zh-CN": "会议室", "zh-TW": "會議室", en: "Meeting Room" },
+  laundryFacilities: { "zh-CN": "洗衣设施", "zh-TW": "洗衣設施", en: "Laundry Facilities" },
+  restaurant: { "zh-CN": "餐厅", "zh-TW": "餐廳", en: "Restaurant" },
+  swimmingPool: { "zh-CN": "游泳池", "zh-TW": "游泳池", en: "Swimming Pool" },
+  freeWiFi: { "zh-CN": "免费 Wi-Fi", "zh-TW": "免費 Wi-Fi", en: "Free Wi-Fi" },
+  luggageStorage: { "zh-CN": "行李寄存", "zh-TW": "行李寄存", en: "Luggage Storage" },
+  bar: { "zh-CN": "酒吧", "zh-TW": "酒吧", en: "Bar" },
+  has24HourFrontDesk: { "zh-CN": "24 小时前台", "zh-TW": "24 小時櫃檯", en: "24h Front Desk" },
+  fitnessCenter: { "zh-CN": "健身中心", "zh-TW": "健身中心", en: "Fitness Center" },
+  parkingLot: { "zh-CN": "停车场", "zh-TW": "停車場", en: "Parking Lot" },
+  currencyExchange: { "zh-CN": "外币兑换", "zh-TW": "外幣兌換", en: "Currency Exchange" },
+  spaAndWellnessCenter: { "zh-CN": "水疗及康体中心", "zh-TW": "水療及康體中心", en: "Spa and Wellness Center" },
+};
+
+const POPULAR_HOTEL_FACILITY_ICONS: Record<HotelPopularFacilityCode, LucideIcon> = {
+  shuttleService: BusFront,
+  freeBreakfast: Coffee,
+  petFriendly: PawPrint,
+  chargingStation: BatteryCharging,
+  meetingRoom: Presentation,
+  laundryFacilities: WashingMachine,
+  restaurant: Utensils,
+  swimmingPool: Waves,
+  freeWiFi: Wifi,
+  luggageStorage: Luggage,
+  bar: Wine,
+  has24HourFrontDesk: ConciergeBell,
+  fitnessCenter: Dumbbell,
+  parkingLot: CircleParking,
+  currencyExchange: CircleDollarSign,
+  spaAndWellnessCenter: Sparkles,
+};
 
 const joinPersonName = ({ surname, givenName }: PersonNameParts) => [surname.trim(), givenName.trim()].filter(Boolean).join(" ");
 const isValidInternationalPhone = (value: string) => {
@@ -296,6 +362,11 @@ const useDisplayMoney = () => {
 };
 const localDateValue = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+const addDaysToDateValue = (value: string, days: number) => {
+  const date = new Date(`${value}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return localDateValue(date);
+};
 const stayDateLabel = (value?: string) => value
   ? new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short", timeZone: "UTC" })
     .format(new Date(`${value}T00:00:00Z`))
@@ -1144,9 +1215,140 @@ function HotelCheckout({ offer, onBack, onComplete }: { offer: HotelOffer; onBac
   </section>;
 }
 
-function HotelDetail({ offers, hotelDetail, onBack, onCheckout, favorite, favoriteBusy, onToggleFavorite, authenticated, onLoginRequired }: { offers: HotelOffer[]; hotelDetail?: HotelBasicInfo; onBack: () => void; onCheckout: (offer: HotelOffer, availability: Partial<HotelOffer> & { price: number; currency: string }) => void; favorite: boolean; favoriteBusy: boolean; onToggleFavorite: () => void; authenticated: boolean; onLoginRequired: () => void }) {
+function CancellationPolicyModal({ offer, locale, onClose }: { offer: HotelOffer; locale: LocaleCode; onClose: () => void }) {
+  const policy = useMemo(() => buildHotelCancellationPolicy(offer.cancellationPolicyDetails, locale, offer.checkInDate, offer.cancelPolicy), [offer, locale]);
+  const copy = locale === "en" ? {
+    title: "Cancellation Policy", close: "Close cancellation policy", full: "Full Refund", none: "No Refund", penalty: "Penalty Applies", today: "Today", checkIn: "Check-in",
+    localTime: "Times are based on the property's local time. No-show or cancellation after check-in may incur charges of up to 100% of the booking value.",
+    amendment: "Free cancellation applies to cancellation of the entire booking. Changes or reductions to the stay are booking amendments and may involve additional charges.",
+  } : locale === "zh-TW" ? {
+    title: "取消政策", close: "關閉取消政策", full: "全額退款", none: "不退款", penalty: "收取費用", today: "今天", checkIn: "入住",
+    localTime: "所有時間均以酒店當地時間為準。未入住或入住後取消，酒店最高可收取訂單總額的 100%。",
+    amendment: "免費取消僅適用於取消整筆訂單。縮短入住日期或減少房間數屬於修改訂單，可能產生額外費用。",
+  } : {
+    title: "取消政策", close: "关闭取消政策", full: "全额退款", none: "不退款", penalty: "收取费用", today: "今天", checkIn: "入住",
+    localTime: "所有时间均以酒店当地时间为准。未入住或入住后取消，酒店最高可收取订单总额的 100%。",
+    amendment: "免费取消仅适用于取消整笔订单。缩短入住日期或减少房间数属于修改订单，可能产生额外费用。",
+  };
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+  return <div className="modal-layer cancellation-policy-layer" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="booking-modal cancellation-policy-modal glass glass-light" role="dialog" aria-modal="true" aria-labelledby="cancellation-policy-title">
+      <button type="button" className="modal-close" onClick={onClose} aria-label={copy.close}><X size={19} /></button>
+      <h2 id="cancellation-policy-title">{copy.title}</h2>
+      {policy.timeline && <div className="cancellation-timeline" aria-label={copy.title}>
+        <div className="cancellation-timeline-head"><strong>{copy.full}</strong><strong>{policy.timeline === "full-to-none" ? copy.none : copy.penalty}</strong></div>
+        <div className="cancellation-timeline-track"><i /><span className="timeline-dot timeline-start" /><span className="timeline-dot timeline-cutoff" /><span className="timeline-dot timeline-end" /></div>
+        <div className="cancellation-timeline-dates"><strong>{copy.today}</strong><strong>{policy.cutoffLabel}</strong><strong>{policy.checkInLabel || copy.checkIn}</strong></div>
+      </div>}
+      <div className="cancellation-policy-lines">{policy.lines.map((line, index) => <p key={`${index}-${line}`}>{line}</p>)}</div>
+      <p className="cancellation-policy-note">{copy.localTime}</p>
+      <p className="cancellation-policy-amendment"><CircleHelp size={19} /><span><strong>{locale === "en" ? "Times are based on the property's local time." : locale === "zh-TW" ? "所有時間均以酒店當地時間為準。" : "所有时间均以酒店当地时间为准。"}</strong>{copy.amendment}</span></p>
+    </section>
+  </div>;
+}
+
+function HotelPhotoGallery({ images, hotelName, onClose }: { images: string[]; hotelName: string; onClose: () => void }) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const dialogRef = useRef<HTMLElement>(null);
+  const move = (offset: number) => setActiveIndex(current => (current + offset + images.length) % images.length);
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    dialogRef.current?.querySelector<HTMLButtonElement>(".modal-close")?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+      if (event.key === "ArrowLeft") move(-1);
+      if (event.key === "ArrowRight") move(1);
+      if (event.key !== "Tab") return;
+      const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])') || [])];
+      if (!controls.length) return;
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, [images.length, onClose]);
+  return <div className="modal-layer hotel-gallery-layer" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="hotel-gallery-modal glass glass-light" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="hotel-gallery-title">
+      <header><div><h2 id="hotel-gallery-title">{hotelName}</h2><p>{activeIndex + 1} / {images.length} Photos</p></div><button type="button" className="modal-close" onClick={onClose} aria-label="Close photo gallery"><X size={19} /></button></header>
+      <div className="hotel-gallery-stage">
+        <img src={images[activeIndex]} alt={`${hotelName} photo ${activeIndex + 1}`} />
+        {images.length > 1 && <><button type="button" className="gallery-navigation previous" onClick={() => move(-1)} aria-label="Previous photo"><ChevronLeft size={24} /></button><button type="button" className="gallery-navigation next" onClick={() => move(1)} aria-label="Next photo"><ChevronRight size={24} /></button></>}
+      </div>
+      <div className="hotel-gallery-thumbnails" aria-label="All hotel photos">{images.map((image, index) => <button type="button" className={index === activeIndex ? "active" : ""} onClick={() => setActiveIndex(index)} aria-label={`View photo ${index + 1}`} aria-current={index === activeIndex ? "true" : undefined} key={`${image}-${index}`}><img src={image} alt="" /></button>)}</div>
+    </section>
+  </div>;
+}
+
+const localizedProductBreakfast = (offer: HotelOffer, locale: LocaleCode): string => {
+  const returned = offer.breakfast?.trim() || "";
+  const matchesLocale = locale === "en" ? !/[\u3400-\u9fff]/.test(returned) : /[\u3400-\u9fff]/.test(returned);
+  if (returned && matchesLocale && !/上游未返回|supplier did not return/i.test(returned)) return returned;
+  if (offer.breakfastIncluded === true) return locale === "en" ? "Breakfast included" : locale === "zh-TW" ? "含早餐" : "含早餐";
+  if (offer.breakfastIncluded === false) return locale === "en" ? "No breakfast" : locale === "zh-TW" ? "不含早餐" : "不含早餐";
+  return locale === "en" ? "Breakfast information unavailable" : locale === "zh-TW" ? "供應商未提供早餐資訊" : "供应商未提供早餐信息";
+};
+
+const localizedRoomWindow = (windowType: number | undefined, locale: LocaleCode) => {
+  const labels: Record<number, Record<LocaleCode, string>> = {
+    0: { en: "No window", "zh-CN": "无窗", "zh-TW": "無窗" },
+    1: { en: "Some rooms have windows", "zh-CN": "部分有窗", "zh-TW": "部分有窗" },
+    2: { en: "Has window(s)", "zh-CN": "有窗", "zh-TW": "有窗" },
+    3: { en: "Interior window(s)", "zh-CN": "内窗", "zh-TW": "內窗" },
+    4: { en: "Skylight", "zh-CN": "天窗", "zh-TW": "天窗" },
+  };
+  return windowType === undefined ? undefined : labels[windowType]?.[locale];
+};
+
+const localizedRoomSmoking = (smokingPolicy: number | undefined, locale: LocaleCode) => {
+  const labels: Record<number, Record<LocaleCode, string>> = {
+    1: { en: "Smoking allowed", "zh-CN": "允许吸烟", "zh-TW": "允許吸煙" },
+    2: { en: "Non-smoking", "zh-CN": "禁烟", "zh-TW": "禁煙" },
+    3: { en: "Some rooms allow smoking", "zh-CN": "部分房间可吸烟", "zh-TW": "部分房間可吸煙" },
+  };
+  return smokingPolicy === undefined ? undefined : labels[smokingPolicy]?.[locale];
+};
+
+const localizedRoomWiFi = (wirelessBroadband: number | undefined, locale: LocaleCode) => {
+  if (wirelessBroadband === undefined) return undefined;
+  if ([2, 4].includes(wirelessBroadband)) return locale === "en" ? "Free Wi-Fi" : locale === "zh-TW" ? "免費 Wi-Fi" : "免费 Wi-Fi";
+  if ([1, 3].includes(wirelessBroadband)) return locale === "en" ? "Wi-Fi available (fees apply)" : locale === "zh-TW" ? "提供 Wi-Fi（收費）" : "提供 Wi-Fi（收费）";
+  if (wirelessBroadband === 0) return locale === "en" ? "No Wi-Fi" : locale === "zh-TW" ? "無 Wi-Fi" : "无 Wi-Fi";
+  return undefined;
+};
+
+const hotelRoomFacts = (offer: HotelOffer, room: HotelRoomInfo | undefined, locale: LocaleCode): Array<{ key: string; label: string; Icon: LucideIcon }> => {
+  const facts: Array<{ key: string; label: string; Icon: LucideIcon }> = [];
+  if (offer.bedTypeDescription?.trim()) facts.push({ key: "bed", label: offer.bedTypeDescription.trim(), Icon: BedDouble });
+  const windowLabel = localizedRoomWindow(offer.windowType ?? room?.windowType, locale);
+  if (windowLabel) facts.push({ key: "window", label: windowLabel, Icon: PanelTopOpen });
+  const smokingLabel = localizedRoomSmoking(room?.smokingPolicy, locale);
+  if (smokingLabel) facts.push({ key: "smoking", label: smokingLabel, Icon: room?.smokingPolicy === 1 ? Cigarette : CigaretteOff });
+  if (room?.roomArea?.trim()) {
+    const area = room.roomArea.trim();
+    facts.push({ key: "area", label: /(?:㎡|m²|sqm|平方米)/i.test(area) ? area : `${area}㎡`, Icon: Maximize2 });
+  }
+  if (room?.roomFloor?.trim()) facts.push({ key: "floor", label: `${locale === "en" ? "Floor" : locale === "zh-TW" ? "樓層" : "楼层"}: ${room.roomFloor.trim()}`, Icon: Building2 });
+  const wiFiLabel = localizedRoomWiFi(room?.wirelessBroadband, locale);
+  if (wiFiLabel) facts.push({ key: "wifi", label: wiFiLabel, Icon: Wifi });
+  return facts;
+};
+
+function HotelDetail({ offers, hotelDetail, locale, onBack, onCheckout, onUpdateSearch, favorite, favoriteBusy, onToggleFavorite, authenticated, onLoginRequired }: { offers: HotelOffer[]; hotelDetail?: HotelBasicInfo; locale: LocaleCode; onBack: () => void; onCheckout: (offer: HotelOffer, availability: Partial<HotelOffer> & { price: number; currency: string }) => void; onUpdateSearch: (query: HotelStayQuery) => Promise<void>; favorite: boolean; favoriteBusy: boolean; onToggleFavorite: () => void; authenticated: boolean; onLoginRequired: () => void }) {
   const { money } = useDisplayMoney();
   const offer = offers[0];
+  const hotelName = hotelDetail?.name || offer.name;
   const detailImages = hotelDetail?.images.length ? hotelDetail.images : offer.image ? [offer.image] : [];
   const roomGroups = useMemo(() => {
     const groups = new Map<string, HotelOffer[]>();
@@ -1158,6 +1360,59 @@ function HotelDetail({ offers, hotelDetail, onBack, onCheckout, favorite, favori
   }, [offers]);
   const [checkingId, setCheckingId] = useState("");
   const [error, setError] = useState("");
+  const [hotelNameCopied, setHotelNameCopied] = useState(false);
+  const [draftCheckIn, setDraftCheckIn] = useState(offer.checkInDate || localDateValue(new Date()));
+  const [draftCheckOut, setDraftCheckOut] = useState(offer.checkOutDate || addDaysToDateValue(localDateValue(new Date()), 1));
+  const [draftRooms, setDraftRooms] = useState(offer.roomNum || 1);
+  const [draftAdults, setDraftAdults] = useState(offer.numberOfAdults || 2);
+  const [draftChildren, setDraftChildren] = useState(offer.numberOfChildren || 0);
+  const [draftChildAges, setDraftChildAges] = useState(offer.childrenAges || []);
+  const [updatingSearch, setUpdatingSearch] = useState(false);
+  const [detailCalendarOpen, setDetailCalendarOpen] = useState<"checkIn" | "checkOut">();
+  const [policyOffer, setPolicyOffer] = useState<HotelOffer>();
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  useEffect(() => {
+    setDraftCheckIn(offer.checkInDate || localDateValue(new Date()));
+    setDraftCheckOut(offer.checkOutDate || addDaysToDateValue(localDateValue(new Date()), 1));
+    setDraftRooms(offer.roomNum || 1);
+    setDraftAdults(offer.numberOfAdults || 2);
+    setDraftChildren(offer.numberOfChildren || 0);
+    setDraftChildAges(offer.childrenAges || []);
+  }, [offer.checkInDate, offer.checkOutDate, offer.roomNum, offer.numberOfAdults, offer.numberOfChildren, offer.childrenAges]);
+  useEffect(() => {
+    if (!hotelNameCopied) return;
+    const timer = window.setTimeout(() => setHotelNameCopied(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [hotelNameCopied]);
+  const copyHotelName = async () => {
+    try {
+      await navigator.clipboard.writeText(hotelName);
+      setHotelNameCopied(true);
+    } catch {
+      setError("Unable to copy hotel name");
+    }
+  };
+  const updateChildCount = (next: number) => {
+    setDraftChildren(next);
+    setDraftChildAges(current => next > current.length
+      ? [...current, ...Array.from({ length: next - current.length }, () => 8)]
+      : current.slice(0, next));
+  };
+  const updateStaySearch = async () => {
+    if (!draftCheckIn || !draftCheckOut || draftCheckOut <= draftCheckIn) {
+      setError(locale === "en" ? "Check-out date must be after check-in date" : locale === "zh-TW" ? "退房日期必須晚於入住日期" : "离店日期必须晚于入住日期");
+      return;
+    }
+    setUpdatingSearch(true);
+    setError("");
+    try {
+      await onUpdateSearch({ checkIn: draftCheckIn, checkOut: draftCheckOut, rooms: draftRooms, adults: draftAdults, children: draftChildren, childAges: draftChildAges });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : locale === "en" ? "Unable to update this search" : "更新搜索失败");
+    } finally {
+      setUpdatingSearch(false);
+    }
+  };
   const check = async (selected: HotelOffer) => {
     if (!authenticated) {
       onLoginRequired();
@@ -1166,47 +1421,72 @@ function HotelDetail({ offers, hotelDetail, onBack, onCheckout, favorite, favori
     setCheckingId(selected.id); setError("");
     try { onCheckout(selected, await api.checkHotelAvailability(selected.id)); } catch (caught) { setError(caught instanceof Error ? caught.message : "This room type is not available for booking"); } finally { setCheckingId(""); }
   };
-  return <section className="booking-flow-page">
+  return <section className="booking-flow-page hotel-detail-page">
     <button className="back-link" onClick={onBack}><ArrowLeft size={17} />Back to Results</button>
     <BookingProgress current={2} labels={["Search", "Results", "Hotel Detail", "Checkout", "Confirmation", "Order Detail"]} />
     <SimulationNotice offer={offer} />
     <header className="accomy-hotel-head">
-      <div><p className="eyebrow">HOTEL INFORMATION</p>{(hotelDetail?.stars ?? offer.stars) !== undefined && <p className="stars">{"★".repeat(hotelDetail?.stars ?? offer.stars ?? 0)}</p>}<h1>{hotelDetail?.name || offer.name}</h1><p><MapPin size={16} />{hotelDetail?.address || hotelDetail?.district || offer.district || hotelDetail?.city || offer.city}</p></div>
-      <div className="hotel-head-actions"><button className={`favorite-button detail ${favorite ? "active" : ""}`} onClick={onToggleFavorite} disabled={favoriteBusy} aria-pressed={favorite}><Heart size={18} fill={favorite ? "currentColor" : "none"} />{favorite ? "Favorited" : "Save"}</button>{(hotelDetail?.rating ?? offer.rating) !== undefined && <span className="accomy-rating"><strong>{hotelDetail?.rating ?? offer.rating}</strong><small>{hotelDetail?.ratingSource || offer.ratingSource || "Supplier rating"}</small></span>}<a className="primary select-room-button" href="#choose-room">Select Room</a></div>
+      <div><p className="eyebrow">HOTEL INFORMATION</p><div className="hotel-name-row"><h1>{hotelName}<button type="button" className="copy-hotel-name" onClick={() => void copyHotelName()} aria-label="Copy hotel name" title="Copy hotel name"><Copy size={17} /></button>{(hotelDetail?.stars ?? offer.stars) !== undefined && <><wbr /><span className="stars hotel-name-stars" aria-label={`${hotelDetail?.stars ?? offer.stars} star hotel`}>{"★".repeat(hotelDetail?.stars ?? offer.stars ?? 0)}</span></>}</h1>{hotelNameCopied && <span className="copy-success" role="status">Copied</span>}</div><p><MapPin size={16} />{hotelDetail?.address || hotelDetail?.district || offer.district || hotelDetail?.city || offer.city}</p></div>
+      <div className="hotel-head-actions"><button className={`favorite-button detail ${favorite ? "active" : ""}`} onClick={onToggleFavorite} disabled={favoriteBusy} aria-pressed={favorite}><Heart size={18} fill={favorite ? "currentColor" : "none"} />{favorite ? "Favorited" : "Save"}</button>{(hotelDetail?.rating ?? offer.rating) !== undefined && <span className="accomy-rating"><strong>{hotelDetail?.rating ?? offer.rating}</strong></span>}</div>
     </header>
-    <div className="hotel-gallery accomy-gallery">{[0, 1, 2, 3, 4].map(index => detailImages[index] ? <img className={index === 0 ? "gallery-main" : ""} src={detailImages[index]} alt={index === 0 ? `${hotelDetail?.name || offer.name} Exterior` : ""} key={detailImages[index]} /> : <div className={`${index === 0 ? "gallery-main " : ""}gallery-unavailable`} key={index}><ImageOff size={25} /><span>No supplier image</span></div>)}{detailImages.length > 0 && <span className="gallery-count"><ImageOff size={15} />{detailImages.length} Photos</span>}</div>
+    <div className="hotel-gallery accomy-gallery">{[0, 1, 2, 3, 4].map(index => detailImages[index] ? <div className={`gallery-tile ${index === 0 ? "gallery-main" : ""}`} key={detailImages[index]}><img src={detailImages[index]} alt={index === 0 ? `${hotelName} Exterior` : ""} /></div> : <div className={`${index === 0 ? "gallery-main " : ""}gallery-unavailable`} key={index}><ImageOff size={25} /><span>No supplier image</span></div>)}{detailImages.length > 0 && <button type="button" className="gallery-count" onClick={() => setGalleryOpen(true)} aria-label={`See all ${detailImages.length} hotel photos`}><Images size={15} />See All {detailImages.length} Photos</button>}</div>
     <section className="hotel-overview-grid">
-      <div className="overview-card glass glass-light"><div className="overview-title"><span><CheckCircle2 size={20} /></span><div><p className="eyebrow">AMENITIES</p><h2>Hotel Facilities</h2></div></div><div className="overview-amenities">{(hotelDetail?.facilities.length ? hotelDetail.facilities : offer.tags).slice(0, 8).map(item => <span key={item}><Check size={14} />{item}</span>)}</div><a href="#facilities">See All <ArrowRight size={14} /></a></div>
+      <div className="overview-card glass glass-light"><div className="overview-title"><span><CheckCircle2 size={20} /></span><div><h2>Hotel Facilities</h2></div></div><div className="overview-amenities">{hotelDetail?.popularFacilities?.length ? hotelDetail.popularFacilities.map(code => { const FacilityIcon = POPULAR_HOTEL_FACILITY_ICONS[code]; return <span className="popular-facility-item" key={code}><span className="popular-facility-icon" aria-hidden="true"><FacilityIcon size={17} strokeWidth={1.8} /></span><span>{POPULAR_HOTEL_FACILITY_LABELS[code][locale]}</span></span>; }) : <p className="popular-facilities-empty">{locale === "en" ? "Supplier did not provide popular facilities" : locale === "zh-TW" ? "供應商未提供熱門設施" : "供应商未提供热门设施"}</p>}</div><a href="#facilities">See All <ArrowRight size={14} /></a></div>
       <div className="overview-card location-card glass glass-light"><div className="location-marker"><MapPin size={24} /></div><div><p className="eyebrow">LOCATION</p><h2>{hotelDetail?.district || offer.district || hotelDetail?.city || offer.city}</h2><p>{hotelDetail?.address || "Supplier did not provide a detailed address"}</p></div></div>
     </section>
     <nav className="hotel-section-tabs glass glass-light" aria-label="Hotel detail sections"><a href="#choose-room">Choose Room</a><a href="#facilities">Facilities</a><a href="#about">About</a></nav>
-    <section className="stay-query-bar glass glass-light" id="choose-room"><div><CalendarDays size={20} /><span><small>Check-in</small><strong>{stayDateLabel(offer.checkInDate)}</strong></span></div><div><CalendarDays size={20} /><span><small>Check-out</small><strong>{stayDateLabel(offer.checkOutDate)}</strong></span></div><div><Users size={20} /><span><small>Rooms & Guests</small><strong>{offer.roomNum || 1} room · {offer.numberOfAdults || 2} adults{offer.numberOfChildren ? ` · ${offer.numberOfChildren} children` : ""}</strong></span></div><button className="secondary" onClick={onBack}>Update Search</button></section>
+    <form className={`stay-query-bar editable-stay-query glass glass-light ${detailCalendarOpen ? "calendar-open" : ""}`} id="choose-room" onSubmit={event => { event.preventDefault(); void updateStaySearch(); }}>
+      <div className="stay-date-range-field">
+        <span className="stay-date-range-icon" aria-hidden="true"><CalendarDays size={20} /></span>
+        <button type="button" className={`stay-date-range-part ${detailCalendarOpen === "checkIn" ? "active" : ""}`} onClick={() => setDetailCalendarOpen(current => current === "checkIn" ? undefined : "checkIn")} aria-expanded={detailCalendarOpen === "checkIn"} aria-label={`${locale === "en" ? "Check-in" : "入住"} ${searchDateLabel(draftCheckIn, locale)}`}><small>{locale === "en" ? "Check-in" : locale === "zh-TW" ? "入住" : "入住"}</small><strong>{searchDateLabel(draftCheckIn, locale)}</strong></button>
+        <ArrowRight className="stay-date-range-arrow" size={18} aria-hidden="true" />
+        <button type="button" className={`stay-date-range-part ${detailCalendarOpen === "checkOut" ? "active" : ""}`} onClick={() => setDetailCalendarOpen(current => current === "checkOut" ? undefined : "checkOut")} aria-expanded={detailCalendarOpen === "checkOut"} aria-label={`${locale === "en" ? "Check-out" : "退房"} ${searchDateLabel(draftCheckOut, locale)}`}><small>{locale === "en" ? "Check-out" : locale === "zh-TW" ? "退房" : "退房"}</small><strong>{searchDateLabel(draftCheckOut, locale)}</strong></button>
+        {detailCalendarOpen && <HotelCalendar locale={locale} checkIn={draftCheckIn} checkOut={draftCheckOut} selecting={detailCalendarOpen} min={localDateValue(new Date())} onClose={() => setDetailCalendarOpen(undefined)} onSelect={next => {
+          setError("");
+          if (detailCalendarOpen === "checkIn") {
+            setDraftCheckIn(next);
+            setDraftCheckOut("");
+            setDetailCalendarOpen("checkOut");
+            return;
+          }
+          const range = resolveHotelDateRangeSelection(draftCheckIn, next);
+          setDraftCheckIn(range.checkIn);
+          setDraftCheckOut(range.checkOut);
+          setDetailCalendarOpen(range.complete ? undefined : "checkOut");
+        }} />}
+      </div>
+      <div className="stay-edit-field occupancy-editor"><Users size={20} /><span><small>Rooms & Guests</small><span className="stay-occupancy-selects"><label><span className="sr-only">Rooms</span><select value={draftRooms} onChange={event => { const next = Number(event.target.value); setDraftRooms(next); setDraftAdults(current => Math.max(current, next)); }} aria-label="Rooms">{Array.from({ length: 8 }, (_, index) => index + 1).map(value => <option key={value} value={value}>{value} room{value > 1 ? "s" : ""}</option>)}</select></label><label><span className="sr-only">Adults</span><select value={draftAdults} onChange={event => setDraftAdults(Number(event.target.value))} aria-label="Adults">{Array.from({ length: 16 - draftRooms + 1 }, (_, index) => index + draftRooms).map(value => <option key={value} value={value}>{value} adult{value > 1 ? "s" : ""}</option>)}</select></label><label><span className="sr-only">Children</span><select value={draftChildren} onChange={event => updateChildCount(Number(event.target.value))} aria-label="Children">{Array.from({ length: 9 }, (_, value) => <option key={value} value={value}>{value} {value === 1 ? "child" : "children"}</option>)}</select></label></span></span></div>
+      <button type="submit" className="primary" disabled={updatingSearch} aria-busy={updatingSearch}>{updatingSearch ? <><LoaderCircle className="spinner" size={17} />Updating</> : "Update Search"}</button>
+    </form>
+    {error && <p className="error-copy stay-query-error" role="alert">{error}</p>}
     <div className="hotel-detail-layout without-rating"><div>
-      <div className="rate-filter-bar glass glass-light"><strong>G-Link Real-time Available Products</strong><span>{roomGroups.length} room types · {offers.length} rate plans</span><span className="upstream-only-badge">Showing API returned data only</span></div>
       <div className="room-offer-list">{roomGroups.map((group, groupIndex) => {
         const roomOffer = group.room;
-        const roomCount = roomOffer.roomNum || 1;
-        const nights = roomOffer.nights || 1;
+        const roomInfo = hotelDetail?.rooms?.find(room => String(room.roomId) === String(roomOffer.roomId));
+        const roomFacts = hotelRoomFacts(roomOffer, roomInfo, locale);
         return <section className="room-offer glass glass-light" key={group.key}>
           <div className="room-summary">
             <div className="room-photo">{roomOffer.image ? <img src={roomOffer.image} alt={roomOffer.roomName} /> : <div className="hotel-image-placeholder"><Building2 size={25} /><span>No room image from supplier</span></div>}<span className="room-photo-index">{String(groupIndex + 1).padStart(2, "0")}</span></div>
             <h2>{roomOffer.roomName}</h2>
-            <ul><li><BedDouble size={16} />{roomOffer.bedTypeDescription || "Bed type subject to supplier confirmation"}</li><li><Users size={16} />{roomOffer.numberOfAdults || 2} adults · {roomCount} room{roomCount > 1 ? "s" : ""}</li><li><CalendarDays size={16} />{nights} night{nights > 1 ? "s" : ""}{roomOffer.maxRoomCount ? ` · Up to ${roomOffer.maxRoomCount} rooms` : ""}</li></ul>
+            {roomFacts.length > 0 && <ul>{roomFacts.map(({ key, label, Icon }) => <li key={key}><Icon size={16} />{label}</li>)}</ul>}
           </div>
-          <div className="room-products">{group.products.map((product, productIndex) => {
+          <div className="room-products">{group.products.map(product => {
             const productRoomCount = product.roomNum || 1;
             const productNights = product.nights || 1;
             const total = product.totalPrice ?? product.nightlyPrice * productNights * productRoomCount;
-            const rateTitle = product.ratePlanName || `${product.breakfast}${product.nonRefundable ? "" : " · Flexible cancellation"}`;
+            const rateTitle = hotelProductTypeTitle(product);
+            const breakfastText = localizedProductBreakfast(product, locale);
+            const cancellationSummary = buildHotelCancellationSummary(product.cancellationPolicyDetails, locale, product.checkInDate, product.cancelPolicy, product.nonRefundable, product.freeCancellation);
             return <article className="room-rate-row" key={product.id}>
               <div className="room-product">
-                <p className="eyebrow">LIVE RATE · {productIndex + 1}</p>
                 <h3>{rateTitle}</h3>
                 <div className="product-benefits">
-                  <span><CheckCircle2 size={18} />{product.breakfast}</span>
-                  <span><Gift size={18} />Package benefits included</span>
-                  <span>{product.payAtHotel ? <Building2 size={18} /> : <CreditCard size={18} />}{product.payAtHotel ? "Pay at hotel" : product.paymentTiming || "Prepay online"}</span>
-                  <span className={product.nonRefundable ? "is-restricted" : "is-flexible"}>{product.nonRefundable ? <X size={18} /> : <ShieldCheck size={18} />}{product.cancelPolicy || (product.nonRefundable ? "Non-refundable" : "Free cancellation")}</span>
+                  <span><CheckCircle2 size={18} />{breakfastText}</span>
+                  <span><Gift size={18} />{locale === "en" ? "Package benefits included" : locale === "zh-TW" ? "包含套餐權益" : "包含套餐权益"}</span>
+                  <span>{product.payAtHotel ? <Building2 size={18} /> : <CreditCard size={18} />}{product.payAtHotel ? (locale === "en" ? "Pay at Hotel" : locale === "zh-TW" ? "到店付款" : "到店付款") : (locale === "en" ? "Prepay" : locale === "zh-TW" ? "預付" : "预付")}</span>
+                  {cancellationSummary.clickable
+                    ? <button type="button" className="cancellation-policy-trigger is-flexible" onClick={() => setPolicyOffer(product)} aria-label={`${locale === "en" ? "View cancellation policy" : "查看取消政策"}: ${cancellationSummary.text}`}><span><ShieldCheck size={18} />{cancellationSummary.text}</span><ChevronRight className="policy-chevron" size={16} /></button>
+                    : <span className="cancellation-policy-static is-restricted"><X size={18} />{cancellationSummary.text}</span>}
                 </div>
               </div>
               <div className="room-price">
@@ -1219,18 +1499,27 @@ function HotelDetail({ offers, hotelDetail, onBack, onCheckout, favorite, favori
             </article>;
           })}</div>
         </section>;
-      })}</div>{error && <p className="error-copy room-error" role="alert">{error}</p>}
+      })}</div>
     </div></div>
-    <section className="accomy-info-section" id="facilities"><div className="section-heading"><p className="eyebrow">FACILITIES</p><h2>Hotel Facilities</h2></div><div className="facility-grid glass glass-light">{(hotelDetail?.facilities.length ? hotelDetail.facilities : offer.tags).map(item => <span key={item}><CheckCircle2 size={16} />{item}</span>)}</div></section>
-    <section className="accomy-info-section" id="about"><div className="section-heading"><p className="eyebrow">ABOUT</p><h2>Hotel Information</h2></div><div className="about-hotel-grid">
-      <div className="about-facts glass glass-light"><div><small>Check-in</small><strong>{[hotelDetail?.checkInTime, hotelDetail?.checkInLateTime].filter(Boolean).join(" – ") || "Supplier did not provide"}</strong></div><div><small>Check-out</small><strong>{hotelDetail?.checkOutTime || "Supplier did not provide"}</strong></div>{hotelDetail?.phone && <div><small>Hotel Phone</small><strong>{hotelDetail.phone}</strong></div>}<div><small>Hotel Address</small><strong>{hotelDetail?.address || hotelDetail?.district || offer.district || "Supplier did not provide"}</strong></div></div>
+    <section className="accomy-info-section" id="facilities"><div className="section-heading"><h2>Hotel Facilities</h2></div><div className="facility-grid glass glass-light">{(hotelDetail?.facilities.length ? hotelDetail.facilities : offer.tags).map(item => <span key={item}><CheckCircle2 size={16} />{item}</span>)}</div></section>
+    <section className="accomy-info-section" id="about"><div className="section-heading"><h2>Hotel Information</h2></div><div className="about-hotel-grid">
+      <div className="about-facts glass glass-light">
+        <div><small>Opening Date</small><strong>{hotelDetail?.openingDate || "--"}</strong></div>
+        <div><small>Renovated Date</small><strong>{hotelDetail?.renovatedDate || "--"}</strong></div>
+        <div><small>Number of Rooms</small><strong>{hotelDetail?.numberOfRooms ?? "--"}</strong></div>
+        <div><small>Hotel Phone</small><strong>{hotelDetail?.phone || "--"}</strong></div>
+        <div className="about-fact-wide"><small>Hotel Address</small><strong>{hotelDetail?.address || hotelDetail?.district || offer.district || "--"}</strong></div>
+      </div>
       <div className="about-description glass glass-light"><h3>Hotel Description</h3><p>{hotelDetail?.introduction || "Supplier did not provide a hotel description."}</p>{hotelDetail?.importantNotices.map(notice => <div className="hotel-important-notice" key={notice}><CircleHelp size={15} /><span>{notice}</span></div>)}</div>
     </div></section>
+    {policyOffer && <CancellationPolicyModal offer={policyOffer} locale={locale} onClose={() => setPolicyOffer(undefined)} />}
+    {galleryOpen && <HotelPhotoGallery images={detailImages} hotelName={hotelName} onClose={() => setGalleryOpen(false)} />}
   </section>;
 }
 
-function HotelCalendar({ locale, checkIn, checkOut, selecting, min, onSelect, onClose }: { locale: LocaleCode; checkIn: string; checkOut: string; selecting: "checkIn" | "checkOut"; min: string; onSelect: (value: string) => void; onClose: () => void }) {
-  const initialDate = new Date(`${selecting === "checkOut" ? checkOut || checkIn || min : checkIn || min}T00:00:00`);
+function HotelCalendar({ locale, checkIn, checkOut, selecting, min, initialDate: initialDateValue, mode = "stay", onSelect, onClose }: { locale: LocaleCode; checkIn: string; checkOut: string; selecting: "checkIn" | "checkOut"; min: string; initialDate?: string; mode?: "stay" | "order"; onSelect: (value: string) => void; onClose: () => void }) {
+  const selectedDate = selecting === "checkOut" ? checkOut || checkIn : checkIn;
+  const initialDate = new Date(`${selectedDate || initialDateValue || min}T00:00:00`);
   const [viewMonth, setViewMonth] = useState(() => new Date(initialDate.getFullYear(), initialDate.getMonth(), 1));
   const intlLocale = locale === "en" ? "en-US" : locale;
   const weekdays = Array.from({ length: 7 }, (_, index) => new Intl.DateTimeFormat(intlLocale, { weekday: "short" })
@@ -1256,9 +1545,15 @@ function HotelCalendar({ locale, checkIn, checkOut, selecting, min, onSelect, on
   };
   const nextMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 1);
   return <div className="light-popover calendar-popover glass glass-light" role="dialog" aria-modal="false" aria-label={locale === "en" ? "Choose date" : locale === "zh-TW" ? "選擇日期" : "选择日期"} onKeyDown={event => { if (event.key === "Escape") onClose(); }}>
-    <button className="calendar-nav previous" type="button" onClick={() => moveMonth(-1)} aria-label={locale === "en" ? "Previous month" : "上个月"}><ChevronLeft size={19} /></button><button className="calendar-nav next" type="button" onClick={() => moveMonth(1)} aria-label={locale === "en" ? "Next month" : "下个月"}><ChevronRight size={19} /></button>
+    <button className="calendar-nav previous" type="button" onClick={() => moveMonth(-1)} aria-label={locale === "en" ? "Previous month" : locale === "zh-TW" ? "上個月" : "上个月"}><ChevronLeft size={19} /></button><button className="calendar-nav next" type="button" onClick={() => moveMonth(1)} aria-label={locale === "en" ? "Next month" : locale === "zh-TW" ? "下個月" : "下个月"}><ChevronRight size={19} /></button>
     <div className="calendar-months">{renderMonth(viewMonth)}{renderMonth(nextMonth)}</div>
-    <div className="calendar-footer"><span>{selecting === "checkIn" ? locale === "en" ? "Select check-in date" : "请选择入住日期" : locale === "en" ? "Select check-out date" : "请选择退房日期"}</span><button type="button" onClick={onClose}>{locale === "en" ? "Close" : locale === "zh-TW" ? "關閉" : "关闭"}</button></div>
+    <div className="calendar-footer"><span>{mode === "order"
+      ? selecting === "checkIn"
+        ? locale === "en" ? "Select start date" : locale === "zh-TW" ? "請選擇開始日期" : "请选择开始日期"
+        : locale === "en" ? "Select end date" : locale === "zh-TW" ? "請選擇結束日期" : "请选择结束日期"
+      : selecting === "checkIn"
+        ? locale === "en" ? "Select check-in date" : locale === "zh-TW" ? "請選擇入住日期" : "请选择入住日期"
+        : locale === "en" ? "Select check-out date" : locale === "zh-TW" ? "請選擇退房日期" : "请选择退房日期"}</span><button type="button" onClick={onClose}>{locale === "en" ? "Close" : locale === "zh-TW" ? "關閉" : "关闭"}</button></div>
   </div>;
 }
 
@@ -1352,6 +1647,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
   const [stage, setStage] = useState<"home" | "results" | "detail" | "checkout" | "result" | "orderDetail">("home");
   const [order, setOrder] = useState<DistributionOrder>();
   const resultsRef = useRef<HTMLElement>(null);
+  const destinationInputRef = useRef<HTMLInputElement>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
   const searchSequenceRef = useRef(0);
   const searchAbortRef = useRef<AbortController | undefined>(undefined);
@@ -1497,12 +1793,13 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     setFavoriteBusyId(hotel.id);
     setError("");
     try {
-      if (favoriteHotels.some(item => item.id === hotel.id)) {
-        await api.deleteFavoriteHotel(hotel.id);
-        setFavoriteHotels(current => current.filter(item => item.id !== hotel.id));
+      const savedFavorite = findFavoriteHotel(favoriteHotels, hotel);
+      if (savedFavorite) {
+        await api.deleteFavoriteHotel(savedFavorite.id);
+        setFavoriteHotels(current => current.filter(item => item.id !== savedFavorite.id));
       } else {
         const saved = await api.addFavoriteHotel(hotel);
-        setFavoriteHotels(current => [saved, ...current.filter(item => item.id !== saved.id)]);
+        setFavoriteHotels(current => [saved, ...current.filter(item => !isSameHotel(item, saved))]);
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : english ? "Failed to update favorite status" : "Failed to update favorite status");
@@ -1683,8 +1980,8 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     setError("");
     try {
       const [products, detail] = await Promise.all([
-        api.getHotelProducts(hotel.id),
-        hotel.hotelId ? api.getHotelDetail(hotel.hotelId) : Promise.resolve(undefined),
+        api.getHotelProducts(hotel.id, english ? "en-US" : "zh-CN"),
+        hotel.hotelId ? api.getHotelDetail(hotel.hotelId, english ? "en-US" : "zh-CN") : Promise.resolve(undefined),
       ]);
       if (!products.length) throw new Error(english ? "Supplier did not return real-time available products" : "Supplier did not return real-time available products");
       setSelectedListing(hotel);
@@ -1698,19 +1995,89 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
       setHydratingId("");
     }
   };
+  const updateHotelStay = async (stay: HotelStayQuery) => {
+    if (!selectedListing) throw new Error(english ? "Hotel information is unavailable" : "酒店信息不可用");
+    const supplierHotelId = Number(selectedListing.hotelId);
+    const query: HotelPageQuery = {
+      ...(activeHotelSearch || {}),
+      destination: activeHotelSearch?.destination || lastSearch || selectedListing.name,
+      ...(Number.isInteger(supplierHotelId) && supplierHotelId > 0 ? { hotelId: supplierHotelId } : {}),
+      language: english ? "en-US" : "zh-CN",
+      checkIn: stay.checkIn,
+      checkOut: stay.checkOut,
+      rooms: stay.rooms,
+      adults: stay.adults,
+      children: stay.children,
+      childAges: stay.childAges,
+      page: 1,
+      pageSize: 10,
+    };
+    const result = await api.searchHotelsPage(query);
+    const refreshedListing = result.items.find(item => String(item.hotelId) === String(selectedListing.hotelId)) ?? result.items[0];
+    if (!refreshedListing) throw new Error(english ? "This hotel has no availability for the selected stay" : "该酒店在所选入住条件下暂无可用房型");
+    const products = await api.getHotelProducts(refreshedListing.id, english ? "en-US" : "zh-CN");
+    if (!products.length) throw new Error(english ? "Supplier did not return real-time available products" : "供应商未返回实时可售房型");
+    setCheckIn(stay.checkIn);
+    setCheckOut(stay.checkOut);
+    setRooms(stay.rooms);
+    setAdults(stay.adults);
+    setChildren(stay.children);
+    setChildAges(stay.childAges);
+    setItems(result.items);
+    setActiveHotelSearch(query);
+    setHotelPage(result.currentPage);
+    setHasMoreHotels(result.hasMore);
+    setSelectedListing(refreshedListing);
+    setRoomOffers(products);
+    setSelection(products[0]);
+  };
   const searchFavoriteHotel = async (hotel: FavoriteHotel) => {
+    const arrival = new Date();
+    const departure = new Date(arrival);
+    departure.setDate(departure.getDate() + 1);
+    const favoriteCheckIn = localDateValue(arrival);
+    const favoriteCheckOut = localDateValue(departure);
+    const supplierHotelId = Number(hotel.hotelId);
+    const query: HotelPageQuery = {
+      destination: hotel.name,
+      ...(Number.isInteger(supplierHotelId) && supplierHotelId > 0 ? { hotelId: supplierHotelId } : {}),
+      language: english ? "en-US" : "zh-CN",
+      checkIn: favoriteCheckIn,
+      checkOut: favoriteCheckOut,
+      rooms,
+      adults,
+      children,
+      childAges,
+      page: 1,
+      pageSize: 10,
+    };
+    setHydratingId(hotel.id);
     setError("");
+    setDestination(hotel.name);
+    setSelectedDestination(undefined);
+    setCheckIn(favoriteCheckIn);
+    setCheckOut(favoriteCheckOut);
+    setLastSearch(hotel.name);
+    setHasSearched(true);
     try {
-      const hotelDetail = await api.getHotelById(hotel.id, hotel.name);
-      await chooseHotel(hotelDetail);
-    } catch {
-      setDestination(hotel.name);
-      void search(hotel.name);
+      const result = await api.searchHotelsPage(query);
+      const listing = result.items.find(item => String(item.hotelId) === String(hotel.hotelId)) ?? result.items[0];
+      if (!listing) throw new Error(english ? "This hotel has no availability for today" : "该酒店今天暂无可用房型");
+      setItems(result.items);
+      setActiveHotelSearch(query);
+      setHotelPage(result.currentPage);
+      setHasMoreHotels(result.hasMore);
+      await chooseHotel(listing);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : english ? "Unable to open hotel details" : "无法打开酒店详情");
+      setStage("home");
+    } finally {
+      setHydratingId("");
     }
   };
   useEffect(() => { window.scrollTo({ top: 0, behavior: "auto" }); }, [stage]);
   const searchForm = <form className="search-card glass glass-dark" aria-label={english ? "Hotel Search" : "Hotel Search"} noValidate onSubmit={event => { event.preventDefault(); void search(); }}>
-    <label className="search-field field-destination"><span>{english ? "Destination / Hotel" : "Destination / Hotel"}</span><div><MapPin size={18} /><input aria-label={english ? "Destination or hotel" : "Destination or hotel"} autoComplete="off" value={destination} onFocus={() => setSuggestionsOpen(true)} onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)} onChange={e => { setDestination(e.target.value); setSelectedDestination(undefined); setSuggestionsOpen(true); setError(""); }} onKeyDown={event => { if (event.key === "Escape") setSuggestionsOpen(false); if (event.key === "Enter") { event.preventDefault(); void search(); } }} /></div>
+    <label className="search-field field-destination"><span>{english ? "Destination / Hotel" : "Destination / Hotel"}</span><div><MapPin size={18} /><input ref={destinationInputRef} aria-label={english ? "Destination or hotel" : "Destination or hotel"} autoComplete="off" value={destination} onFocus={() => setSuggestionsOpen(true)} onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)} onChange={e => { setDestination(e.target.value); setSelectedDestination(undefined); setSuggestionsOpen(true); setError(""); }} onKeyDown={event => { if (event.key === "Escape") setSuggestionsOpen(false); if (event.key === "Enter") { event.preventDefault(); void search(); } }} />{destination && <button type="button" className="destination-clear" aria-label={english ? "Clear destination" : "清空目的地"} title={english ? "Clear destination" : "清空目的地"} onClick={() => { setDestination(""); setSelectedDestination(undefined); setSupplierHotelFilters(undefined); setSuggestionsOpen(true); setError(""); destinationInputRef.current?.focus(); }}><X size={15} /></button>}</div>
       {suggestionsOpen && <div className="light-popover glass glass-light" role="listbox" aria-label={english ? "Destination suggestions" : "Destination suggestions"} aria-busy={destinationLoading}>
         {!destination.trim() ? <div className="destination-default-panel">
           {recentSearches.length > 0 && <section className="recent-destinations"><h3>{hotelTr("最近搜索", "Recent searches", "近期搜尋")}</h3>{recentSearches.map(item => <button type="button" key={`${item.name}-${item.latGoogle}-${item.lngGoogle}`} onMouseDown={event => { event.preventDefault(); chooseRecentSearch(item); }}><Clock3 size={17} /><strong>{item.name}</strong><span>{recentDateLabel(item.checkIn)} – {recentDateLabel(item.checkOut)} <i /> {recentOccupancyLabel(item.rooms, item.adults)}</span></button>)}</section>}
@@ -1752,7 +2119,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     <button type="submit" className="primary search-cta" disabled={loading} aria-busy={loading}>{loading ? <><LoaderCircle className="spinner" size={18} />{english ? "Searching" : "Searching"}</> : <><Search size={18} />{english ? "Search Hotels" : "Search Hotels"}</>}</button>
     {error && <div className="search-inline-error" role="alert"><CircleHelp size={16} /><span>{error}</span><button type="button" onClick={() => void search()}>{english ? "Retry" : "Retry"}</button></div>}
   </form>;
-  if (selection && roomOffers.length && stage === "detail") return <HotelDetail offers={roomOffers} hotelDetail={hotelDetail} favorite={Boolean(selectedListing && favoriteHotels.some(item => item.id === selectedListing.id))} favoriteBusy={favoriteBusyId === selectedListing?.id} onToggleFavorite={() => { if (selectedListing) void toggleFavorite(selectedListing); }} authenticated={authenticated} onLoginRequired={onLoginRequired} onBack={() => setStage("results")} onCheckout={(selectedOffer, availability) => { setSelection({ ...selectedOffer, ...availability, totalPrice: availability.price, currency: availability.currency }); setStage("checkout"); }} />;
+  if (selection && roomOffers.length && stage === "detail") return <HotelDetail offers={roomOffers} hotelDetail={hotelDetail} locale={locale} favorite={Boolean(selectedListing && findFavoriteHotel(favoriteHotels, selectedListing))} favoriteBusy={favoriteBusyId === selectedListing?.id} onToggleFavorite={() => { if (selectedListing) void toggleFavorite(selectedListing); }} authenticated={authenticated} onLoginRequired={onLoginRequired} onBack={() => setStage("results")} onUpdateSearch={updateHotelStay} onCheckout={(selectedOffer, availability) => { setSelection({ ...selectedOffer, ...availability, totalPrice: availability.price, currency: availability.currency }); setStage("checkout"); }} />;
   if (selection && stage === "checkout") return <HotelCheckout offer={selection} onBack={() => setStage("detail")} onComplete={created => { setOrder(created); setStage("result"); }} />;
   if (order && stage === "result") return <BookingResult order={order} type="hotel" onDetails={() => setStage("orderDetail")} onRestart={() => { setSelection(undefined); setRoomOffers([]); setSelectedListing(undefined); setOrder(undefined); setStage("home"); }} />;
   if (order && stage === "orderDetail") return <OrderDetailView initialOrder={order} locale={locale} onOrderChange={setOrder} onBack={() => setStage("result")} onRestart={() => { setSelection(undefined); setRoomOffers([]); setSelectedListing(undefined); setOrder(undefined); setStage("home"); }} />;
@@ -1764,14 +2131,15 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
         </section>
         <section className="hotel-home-favorites glass glass-light" aria-labelledby="hotel-home-favorites-title" aria-busy={favoritesLoading}>
           <div className="hotel-home-favorites-heading">
-            <div><span className="favorite-section-icon"><Heart size={18} fill="currentColor" /></span><div><p className="eyebrow">SAVED STAYS</p><h2 id="hotel-home-favorites-title">{english ? "My Favorite Hotels" : "My Favorite Hotels"}</h2><p>{english ? "Your personal hotel preferences..." : "Your personal hotel preferences..."}</p></div></div>
+            <div><span className="favorite-section-icon"><Heart size={18} fill="currentColor" /></span><div><h2 id="hotel-home-favorites-title">{english ? "My Favorite Hotels" : "My Favorite Hotels"}</h2><p>{english ? "Your personal hotel preferences..." : "Your personal hotel preferences..."}</p></div></div>
             {authenticated && favoriteHotels.length > 0 && <span className="favorite-count">{favoriteHotels.length} {english ? "favorites" : "favorites"}</span>}
           </div>
           {favoritesLoading ? <div className="favorite-hotel-grid" aria-hidden="true">{[1, 2, 3, 4].map(item => <div className="favorite-hotel-card skeleton-card" key={item} />)}</div>
             : !authenticated ? <div className="favorite-empty"><Heart size={22} /><div><strong>{english ? "Sign in to view your favorite hotels" : "Sign in to view your favorite hotels"}</strong><span>{english ? "Favorites are saved in your FusionGo account." : "Favorites are saved in your FusionGo account."}</span></div><button className="primary" onClick={onLoginRequired}>{english ? "Sign In" : "Sign In"}</button></div>
               : favoriteHotels.length ? <div className="favorite-hotel-grid">{favoriteHotels.map(hotel => <article className="favorite-hotel-card hotel-home-favorite-card" key={hotel.id}>
+                <button type="button" className="favorite-card-link" onClick={() => void searchFavoriteHotel(hotel)} disabled={!!hydratingId} aria-label={`Open hotel details: ${hotel.name}`} />
                 {hotel.image ? <img src={hotel.image} alt="" /> : <div className="favorite-image-placeholder"><Building2 size={22} /></div>}
-                <div><span className="favorite-mark"><Heart size={13} fill="currentColor" />{english ? "Favorited" : "Favorited"}</span><h3 title={hotel.name}>{hotel.name}</h3><p>{[hotel.city, hotel.district].filter(Boolean).join(" · ") || (english ? "Supplier did not provide location" : "Supplier did not provide location")}</p><div className="favorite-card-actions"><button className="secondary" onClick={() => { void searchFavoriteHotel(hotel); }} disabled={!!hydratingId}>{english ? "Search Live Rates" : "Search Live Rates"}</button><button className="favorite-remove" onClick={() => void toggleFavorite(hotel)} disabled={favoriteBusyId === hotel.id} aria-label={english ? `Remove from Favorites...${hotel.name}` : `Remove from Favorites...${hotel.name}`}><Heart size={15} fill="currentColor" /></button></div></div>
+                <div><span className="favorite-mark"><Heart size={13} fill="currentColor" />{english ? "Favorited" : "Favorited"}</span><h3 title={hotel.name}>{hotel.name}</h3>{hotel.stars !== undefined && <div className="favorite-hotel-stars" title={hotel.starDescription || `${hotel.stars}-star hotel`} aria-label={hotel.starDescription || `${hotel.stars}-star hotel`}>{"★".repeat(hotel.stars)}</div>}<p>{[hotel.city, hotel.district].filter(Boolean).join(" · ") || (english ? "Supplier did not provide location" : "Supplier did not provide location")}</p></div>
               </article>)}</div>
                 : <div className="favorite-empty"><Heart size={22} /><div><strong>{english ? "No favorite hotels yet" : "No favorite hotels yet"}</strong><span>{english ? "Click the heart icon in search results or hotel detail pages to add favorites." : "Click the heart icon in search results or hotel detail pages to add favorites."}</span></div></div>}
         </section>
@@ -1815,9 +2183,9 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
         <div className="result-list" aria-live="polite">
         {loading ? [1,2,3].map(item => <div className="hotel-card skeleton-card" key={item} aria-hidden="true" />) : visibleHotels.length ? visibleHotels.map(hotel => <article className="hotel-card" key={hotel.id}>
           {hotel.image ? <img src={hotel.image} alt="" /> : <div className="hotel-image-placeholder card"><Building2 size={28} /><span>{english ? "No image from supplier" : "No image from supplier"}</span></div>}
-          <div className="hotel-info"><div className="hotel-top"><div><h3>{hotel.name}</h3>{hotel.stars !== undefined && <span className="hotel-star-badge" aria-label={english ? `${hotel.stars}-star hotel` : `${hotel.stars} 星级酒店`}><b aria-hidden="true">{"★".repeat(hotel.stars)}</b></span>}{(hotel.district || hotel.distanceKm !== undefined) && <p className="hotel-location-summary">{hotel.district && <span>{hotel.district}</span>}{hotel.distanceKm !== undefined && <span className="hotel-distance"><MapPin size={12} />{hotelTr(`距目的地 ${hotel.distanceKm.toFixed(1)} km`, `${hotel.distanceKm.toFixed(1)} km from destination`, `距目的地 ${hotel.distanceKm.toFixed(1)} km`)}</span>}</p>}</div><div className="hotel-card-actions"><button className={`favorite-button ${favoriteHotels.some(item => item.id === hotel.id) ? "active" : ""}`} onClick={() => void toggleFavorite(hotel)} disabled={favoriteBusyId === hotel.id} aria-pressed={favoriteHotels.some(item => item.id === hotel.id)} aria-label={favoriteHotels.some(item => item.id === hotel.id) ? `Remove from Favorites...${hotel.name}` : `Add to Favorites...${hotel.name}`}><Heart size={17} fill={favoriteHotels.some(item => item.id === hotel.id) ? "currentColor" : "none"} /></button>{hotel.rating !== undefined && <span className="rating" aria-label={english ? `Supplier rating ${hotel.rating}` : `供应商评分 ${hotel.rating}`}><strong>{hotel.rating}</strong></span>}</div></div>
+          <div className="hotel-info"><div className="hotel-top"><div><h3>{hotel.name}</h3>{hotel.stars !== undefined && <span className="hotel-star-badge" aria-label={english ? `${hotel.stars}-star hotel` : `${hotel.stars} 星级酒店`}><b aria-hidden="true">{"★".repeat(hotel.stars)}</b></span>}{(hotel.district || hotel.distanceKm !== undefined) && <p className="hotel-location-summary">{hotel.district && <span>{hotel.district}</span>}{hotel.distanceKm !== undefined && <span className="hotel-distance"><MapPin size={12} />{hotelTr(`距目的地 ${hotel.distanceKm.toFixed(1)} km`, `${hotel.distanceKm.toFixed(1)} km from destination`, `距目的地 ${hotel.distanceKm.toFixed(1)} km`)}</span>}</p>}</div><div className="hotel-card-actions"><button className={`favorite-button ${findFavoriteHotel(favoriteHotels, hotel) ? "active" : ""}`} onClick={() => void toggleFavorite(hotel)} disabled={favoriteBusyId === hotel.id} aria-pressed={Boolean(findFavoriteHotel(favoriteHotels, hotel))} aria-label={findFavoriteHotel(favoriteHotels, hotel) ? `Remove from Favorites...${hotel.name}` : `Add to Favorites...${hotel.name}`}><Heart size={17} fill={findFavoriteHotel(favoriteHotels, hotel) ? "currentColor" : "none"} /></button>{hotel.rating !== undefined && <span className="rating" aria-label={english ? `Supplier rating ${hotel.rating}` : `供应商评分 ${hotel.rating}`}><strong>{hotel.rating}</strong></span>}</div></div>
           <div className="tags">{hotel.tags.map((tag, index) => <span key={`${tag}-${index}`}>{tag}</span>)}</div>
-          <div className="room-line"><div className="price"><small>per night, tax included</small><strong>{hotel.nightlyPrice ? money(hotel.nightlyPrice, hotel.currency) : "Real-time Query"}</strong>{hotel.nightlyPrice ? <span>{`${hotel.nights || 1} nights × ${hotel.roomNum || 1} rooms, total ${money(hotel.totalPrice ?? hotel.nightlyPrice * (hotel.nights || 1) * (hotel.roomNum || 1), hotel.currency)}`}</span> : null}</div><button className="primary" onClick={() => chooseHotel(hotel)} disabled={hydratingId === hotel.id}>{hydratingId === hotel.id ? <><LoaderCircle className="spinner" size={16} />Search Live Products</> : "View Room Types"}</button></div></div>
+          <div className="room-line"><div className="price"><small>per night, tax included</small><strong>{hotel.nightlyPrice ? money(hotel.nightlyPrice, hotel.currency) : "Real-time Query"}</strong>{hotel.nightlyPrice ? <span>{`${hotel.nights || 1} nights × ${hotel.roomNum || 1} rooms, total ${money(hotel.totalPrice ?? hotel.nightlyPrice * (hotel.nights || 1) * (hotel.roomNum || 1), hotel.currency)}`}</span> : null}</div><button className="primary" onClick={() => chooseHotel(hotel)} disabled={hydratingId === hotel.id}>{hydratingId === hotel.id ? <><LoaderCircle className="spinner" size={16} />Search Live Products</> : "Check Availability"}</button></div></div>
         </article>) : hasSearched && !error ? <div className="hotel-empty-state glass glass-light"><div><Building2 size={28} /></div><h3>{english ? "No hotels match your criteria" : "No hotels match your criteria"}</h3><p>{items.length ? english ? "Please clear or relax some filter criteria." : "Please clear or relax some filter criteria." : english ? "Try a different destination or date..." : "Try a different destination or date..."}</p><button className="primary" onClick={() => { if (items.length) clearHotelFilters(); else setDestination("Hong Kong"); setError(""); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{items.length ? english ? "Clear Filters" : "Clear Filters" : english ? "Search Hong Kong Hotels" : "Search Hong Kong Hotels"}</button></div> : null}
         {!loading && items.length > 0 && hasMoreHotels && <div className="hotel-load-more" ref={loadMoreSentinelRef} aria-live="polite">{loadingMore && <span role="status" aria-label={english ? "Loading more hotels" : "正在加载更多酒店"}><LoaderCircle className="spinner" size={20} /></span>}{loadMoreError && <><p role="alert">{loadMoreError}</p><button className="secondary" type="button" onClick={() => { setLoadMoreError(""); void loadMoreHotels(); }}>{english ? "Retry" : "重试"}</button></>}</div>}
         {!loading && hasSearched && visibleHotels.length > 0 && !hasMoreHotels && !loadMoreError && <div className="hotel-list-end" role="status">
@@ -2693,6 +3061,7 @@ function FlightSearch({ locale, authenticated, onLoginRequired }: { locale: Loca
 
 function OrdersPage({ locale }: { locale: LocaleCode }) {
   const english = locale === "en";
+  const orderTr = (zh: string, en: string, zhTw = zh) => locale === "en" ? en : locale === "zh-TW" ? zhTw : zh;
   const [orders, setOrders] = useState<DistributionOrder[]>([]);
   const [selection, setSelection] = useState<DistributionOrder>();
   const [productFilter, setProductFilter] = useState<OrderProductFilter>("all");
@@ -2700,6 +3069,7 @@ function OrdersPage({ locale }: { locale: LocaleCode }) {
   const [datePreset, setDatePreset] = useState<OrderDatePreset>("all");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [orderCalendarOpen, setOrderCalendarOpen] = useState<"checkIn" | "checkOut">();
   const [keyword, setKeyword] = useState("");
   const [minAmount, setMinAmount] = useState("");
   const [maxAmount, setMaxAmount] = useState("");
@@ -2749,6 +3119,7 @@ function OrdersPage({ locale }: { locale: LocaleCode }) {
   ];
   const updateDatePreset = (value: OrderDatePreset) => {
     setDatePreset(value);
+    setOrderCalendarOpen(undefined);
     if (value === "all") {
       setStartDate("");
       setEndDate("");
@@ -2770,6 +3141,7 @@ function OrdersPage({ locale }: { locale: LocaleCode }) {
     setDatePreset("all");
     setStartDate("");
     setEndDate("");
+    setOrderCalendarOpen(undefined);
     setKeyword("");
     setMinAmount("");
     setMaxAmount("");
@@ -2783,7 +3155,7 @@ function OrdersPage({ locale }: { locale: LocaleCode }) {
   ].filter(Boolean).length;
   return <section className="consumer-content-page orders-content-page"><section className="page-heading compact"><div><p className="eyebrow">MY BOOKINGS</p><h1>My Orders</h1><p>View hotel, flight, and after-sales progress in one place</p></div></section>
     {error && <div className="error-banner" role="alert">{error}</div>}
-    <section className="booking-filter-panel glass glass-light" aria-label="Order Filters">
+    <section className={`booking-filter-panel glass glass-light ${orderCalendarOpen ? "calendar-open" : ""}`} aria-label={orderTr("订单筛选", "Order filters", "訂單篩選")}>
       <div className="booking-filter-head">
         <div><span><SlidersHorizontal size={17} /></span><div><strong>Filter Orders</strong><small>{`Showing ${visibleOrders.length} / ${orders.length} orders`}</small></div></div>
         <button className="text-button" onClick={resetFilters} disabled={!activeFilterCount}>Clear Filters{activeFilterCount ? ` · ${activeFilterCount}` : ""}</button>
@@ -2794,8 +3166,32 @@ function OrdersPage({ locale }: { locale: LocaleCode }) {
         <label><span>Product Type</span><select value={productFilter} onChange={event => setProductFilter(event.target.value as OrderProductFilter)}><option value="all">All Products</option><option value="hotel">Hotels</option><option value="flight">Flights</option></select></label>
         <label><span>Exact Status</span><select value={statusFilter} onChange={event => setStatusFilter(event.target.value as OrderStatusFilter)}><option value="all">All Status</option><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="aftersales">After-sales</option>{concreteOrderStatuses.map(status => <option key={status} value={status}>{english ? statusLabelsEn[status] : statusLabels[status]}</option>)}</select></label>
         <label><span>Created Time</span><select value={datePreset} onChange={event => updateDatePreset(event.target.value as OrderDatePreset)}><option value="all">Any Time</option><option value="today">Today</option><option value="7d">Last 7 Days</option><option value="30d">Last 30 Days</option><option value="custom">Custom</option></select></label>
-        <label><span>Start Date</span><input type="date" value={startDate} onChange={event => { setDatePreset("custom"); setStartDate(event.target.value); }} /></label>
-        <label><span>End Date</span><input type="date" value={endDate} onChange={event => { setDatePreset("custom"); setEndDate(event.target.value); }} /></label>
+        <div className="booking-date-range-filter">
+          <span>{orderTr("创建日期范围", "Created date range", "建立日期範圍")}</span>
+          <div className="booking-date-range-control">
+            <span className="booking-date-range-icon" aria-hidden="true"><CalendarDays size={18} /></span>
+            <button type="button" className={orderCalendarOpen === "checkIn" ? "active" : ""} onClick={() => setOrderCalendarOpen(current => current === "checkIn" ? undefined : "checkIn")} aria-expanded={orderCalendarOpen === "checkIn"} aria-label={`${orderTr("开始日期", "Start date", "開始日期")} ${searchDateLabel(startDate, locale)}`}><small>{orderTr("开始日期", "Start date", "開始日期")}</small><strong>{searchDateLabel(startDate, locale)}</strong></button>
+            <ArrowRight size={16} aria-hidden="true" />
+            <button type="button" className={orderCalendarOpen === "checkOut" ? "active" : ""} onClick={() => setOrderCalendarOpen(current => current === "checkOut" ? undefined : "checkOut")} aria-expanded={orderCalendarOpen === "checkOut"} aria-label={`${orderTr("结束日期", "End date", "結束日期")} ${searchDateLabel(endDate, locale)}`}><small>{orderTr("结束日期", "End date", "結束日期")}</small><strong>{searchDateLabel(endDate, locale)}</strong></button>
+          </div>
+          {orderCalendarOpen && <HotelCalendar locale={locale} checkIn={startDate} checkOut={endDate} selecting={orderCalendarOpen} min="2000-01-01" initialDate={localDateValue(new Date())} mode="order" onClose={() => setOrderCalendarOpen(undefined)} onSelect={next => {
+            setDatePreset("custom");
+            if (orderCalendarOpen === "checkIn") {
+              setStartDate(next);
+              setEndDate("");
+              setOrderCalendarOpen("checkOut");
+              return;
+            }
+            if (!startDate || next < startDate) {
+              setStartDate(next);
+              setEndDate("");
+              setOrderCalendarOpen("checkOut");
+              return;
+            }
+            setEndDate(next);
+            setOrderCalendarOpen(undefined);
+          }} />}
+        </div>
         <label><span>Min Amount</span><input type="number" min="0" inputMode="decimal" value={minAmount} onChange={event => setMinAmount(event.target.value)} placeholder="Any" /></label>
         <label><span>Max Amount</span><input type="number" min="0" inputMode="decimal" value={maxAmount} onChange={event => setMaxAmount(event.target.value)} placeholder="Any" /></label>
       </div>

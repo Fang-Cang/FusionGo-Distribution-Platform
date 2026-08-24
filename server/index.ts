@@ -576,6 +576,7 @@ app.patch("/api/account/notifications", (req, res) => {
 
 const favoriteHotelSchema = z.object({
   id: z.string().min(1).max(160),
+  hotelId: z.union([z.string().min(1).max(160), z.number().int().positive()]).optional(),
   inventorySource: z.enum(["glink", "simulation"]).optional(),
   name: z.string().min(1).max(200),
   city: z.string().max(100).default(""),
@@ -584,6 +585,8 @@ const favoriteHotelSchema = z.object({
   rating: z.number().min(0).max(10).optional(),
   ratingSource: z.string().max(100).optional(),
   stars: z.number().int().min(0).max(5).optional(),
+  starCode: z.number().int().positive().optional(),
+  starDescription: z.string().max(20).optional(),
   image: z.string().max(2_000).optional(),
   tags: z.array(z.string().max(80)).max(20).default([]),
   roomName: z.string().max(200).default(""),
@@ -875,8 +878,11 @@ app.post("/api/hotels/by-id", async (req, res, next) => {
 });
 
 app.post("/api/hotels/detail", async (req, res) => {
-  const parsed = z.object({ hotelId: z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]) }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Missing supplier hotel ID" });
+  const parsed = z.object({
+    hotelId: z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]),
+    language: z.enum(["zh-CN", "en-US"]),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Missing supplier hotel ID or language" });
   const hotelId = Number(parsed.data.hotelId);
   if (useLocalHotelSimulation) {
     const hotel = database.listHotels().find(item => Number(item.hotelId) === hotelId) || database.listHotels()[0];
@@ -894,7 +900,7 @@ app.post("/api/hotels/detail", async (req, res) => {
     };
     return res.json(ok(detail));
   }
-  return res.json(ok(await queryGlinkHotelBasicInfo(runtime.glink, hotelId)));
+  return res.json(ok(await queryGlinkHotelBasicInfo(runtime.glink, hotelId, parsed.data.language)));
 });
 
 app.post("/api/hotels/filters", async (req, res) => {
@@ -978,7 +984,7 @@ app.post("/api/integration/glink/lowest-prices", async (req, res) => {
 });
 
 app.post("/api/hotels/product-details", async (req, res) => {
-  const parsed = z.object({ offerId: z.string().min(1) }).safeParse(req.body);
+  const parsed = z.object({ offerId: z.string().min(1), language: z.enum(["zh-CN", "en-US"]).default("en-US") }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_PARAMS", message: "Missing hotel quote identifier" });
   if (useLocalHotelSimulation) {
     const offer = database.findHotel(parsed.data.offerId);
@@ -998,7 +1004,7 @@ app.post("/api/hotels/product-details", async (req, res) => {
   const quote = hotelQuotes.get(parsed.data.offerId);
   if (!quote) return res.status(410).json({ code: "QUOTE_EXPIRED", message: "Hotel search session has expired. Please search again." });
   try {
-    const hydratedProducts = await hydrateGlinkProducts(runtime.glink, quote);
+    const hydratedProducts = await hydrateGlinkProducts(runtime.glink, quote, { language: parsed.data.language });
     hydratedProducts.forEach(product => hotelQuotes.set(product.quote.id, product.quote));
     return res.json(ok(hydratedProducts.map(({ offer }) => ({
       ...offer,

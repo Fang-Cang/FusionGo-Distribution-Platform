@@ -145,15 +145,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ destinationId, language }),
     }),
-  getHotelProducts: (offerId: string) =>
+  getHotelProducts: (offerId: string, language: "zh-CN" | "en-US") =>
     request<HotelOffer[]>("/api/hotels/product-details", {
       method: "POST",
-      body: JSON.stringify({ offerId }),
+      body: JSON.stringify({ offerId, language }),
     }),
-  getHotelDetail: (hotelId: number | string) =>
+  getHotelDetail: (hotelId: number | string, language: "zh-CN" | "en-US") =>
     request<HotelBasicInfo>("/api/hotels/detail", {
       method: "POST",
-      body: JSON.stringify({ hotelId }),
+      body: JSON.stringify({ hotelId, language }),
     }),
   checkHotelAvailability: (offerId: string) =>
     request<{

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { FlightDestination, FlightOffer, HotelBasicInfo, HotelOffer, HotelPriceBreakdown, NationalityOption } from "../../src/types.js";
+import { HOTEL_POPULAR_FACILITY_CODES, type FlightDestination, type FlightOffer, type HotelBasicInfo, type HotelCancellationPolicyDetails, type HotelOffer, type HotelPopularFacilityCode, type HotelPriceBreakdown, type NationalityOption } from "../../src/types.js";
 import { FcgError, type FcgClient } from "./client.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -18,6 +18,11 @@ const optionalNumber = (value: unknown): number | undefined => {
   if (value === undefined || value === null || value === "") return undefined;
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+export const normalizeGlinkPopularFacilities = (value: unknown): HotelPopularFacilityCode[] => {
+  const flags = record(value);
+  return HOTEL_POPULAR_FACILITY_CODES.filter(code => string(flags[code]) === "1");
 };
 const googleDistanceKm = (
   originLat: number,
@@ -39,34 +44,43 @@ const googleDistanceKm = (
   const distance = 6_371 * 2 * Math.atan2(Math.sqrt(normalizedHaversine), Math.sqrt(1 - normalizedHaversine));
   return Math.round(distance * 10) / 10;
 };
-const GLINK_HOTEL_STAR_ENUM = new Map<number, number>([
-  [19, 5], // 五星级
-  [29, 5], // 豪华型（准五星）
-  [39, 4], // 四星级
-  [49, 4], // 高档型（准四星）
-  [59, 3], // 三星级
-  [64, 3], // 舒适型（准三星）
-  [69, 2], // 二星级
-  [66, 2], // 经济型（准二星）
-  [79, 2], // 二星级以下 / 公寓
+export const GLINK_HOTEL_STAR_MAPPING = new Map<number, { stars: number; description: string }>([
+  [19, { stars: 5, description: "五星级" }],
+  [29, { stars: 5, description: "五星级" }],
+  [39, { stars: 4, description: "四星级" }],
+  [49, { stars: 4, description: "四星级" }],
+  [59, { stars: 3, description: "三星级" }],
+  [64, { stars: 3, description: "三星级" }],
+  [69, { stars: 2, description: "二星级" }],
+  [66, { stars: 2, description: "二星级" }],
+  [79, { stars: 2, description: "二星级" }],
 ]);
 
-export const normalizeGlinkHotelStars = (...candidates: unknown[]): number | undefined => {
+const hotelStarDescription = (stars: number) => `${["", "一", "二", "三", "四", "五"][stars]}星级`;
+
+export const resolveGlinkHotelStar = (...candidates: unknown[]): { starCode?: number; stars: number; starDescription: string } | undefined => {
   for (const candidate of candidates) {
     if (candidate === undefined || candidate === null || candidate === "") continue;
     const matched = String(candidate).match(/\d+(?:\.\d+)?/);
     if (!matched) continue;
     const raw = Number(matched[0]);
-    const normalized = GLINK_HOTEL_STAR_ENUM.get(raw)
-      ?? (raw >= 100 && raw <= 500 && raw % 100 === 0
+    const mapped = GLINK_HOTEL_STAR_MAPPING.get(raw);
+    if (mapped) return { starCode: raw, stars: mapped.stars, starDescription: mapped.description };
+    const normalized = raw >= 100 && raw <= 500 && raw % 100 === 0
       ? raw / 100
       : raw >= 10 && raw <= 50 && raw % 10 === 0
         ? raw / 10
-        : raw);
-    if (normalized >= 1 && normalized <= 5) return Math.round(normalized);
+        : raw;
+    if (normalized >= 1 && normalized <= 5) {
+      const stars = Math.round(normalized);
+      return { stars, starDescription: hotelStarDescription(stars) };
+    }
   }
   return undefined;
 };
+
+export const normalizeGlinkHotelStars = (...candidates: unknown[]): number | undefined =>
+  resolveGlinkHotelStar(...candidates)?.stars;
 const plainText = (value: unknown): string => string(value)
   .replace(/<br\s*\/?>/gi, "；")
   .replace(/<[^>]+>/g, " ")
@@ -213,11 +227,15 @@ export class GlinkNoProductError extends Error {
   }
 }
 
-export async function queryGlinkHotelBasicInfo(client: FcgClient, hotelId: number): Promise<HotelBasicInfo> {
+export async function queryGlinkHotelBasicInfo(
+  client: FcgClient,
+  hotelId: number,
+  language: "zh-CN" | "en-US",
+): Promise<HotelBasicInfo> {
   const [detailResponse, imageResponse] = await Promise.all([
     client.glink<unknown>("/hotel/detail", {
       hotelIds: [String(hotelId)],
-      language: "zh-CN",
+      language,
       settings: ["comment", "hotelFacilityNew", "importantNotices"],
     }),
     client.glink<unknown>("/hotel/images", { hotelIds: [String(hotelId)] }),
@@ -234,22 +252,35 @@ export async function queryGlinkHotelBasicInfo(client: FcgClient, hotelId: numbe
   const facilities = array(detail.facility).map(record)
     .filter(item => string(item.categoryType) !== "2" && number(item.status, 1) !== 0)
     .map(item => string(item.name)).filter((name, index, all) => Boolean(name) && all.indexOf(name) === index);
+  const popularFacilities = normalizeGlinkPopularFacilities(detail.popularFacility);
+  const rooms = array(detail.roomInfos).map(record).map(room => ({
+    roomId: number(room.roomId),
+    ...(optionalNumber(room.isAllowSmoking) !== undefined ? { smokingPolicy: optionalNumber(room.isAllowSmoking) } : {}),
+    ...(string(room.roomAcreage) ? { roomArea: string(room.roomAcreage) } : {}),
+    ...(string(room.roomFloor) ? { roomFloor: string(room.roomFloor) } : {}),
+    ...(optionalNumber(room.windowDetail) !== undefined ? { windowType: optionalNumber(room.windowDetail) } : {}),
+    ...(optionalNumber(room.wirelessBroadband) !== undefined ? { wirelessBroadband: optionalNumber(room.wirelessBroadband) } : {}),
+  })).filter(room => room.roomId > 0);
+  const hotelStar = resolveGlinkHotelStar(detail.hotelStar, detail.starRating, detail.hotelStarName);
   return {
     hotelId: number(detail.hotelId, hotelId),
     name: string(detail.hotelName, "未知酒店"),
     city: string(detail.cityName, string(detail.city)),
     district: string(detail.distinctName, string(detail.districtName, string(detail.businessName))),
     ...(string(detail.address) ? { address: string(detail.address) } : {}),
-    ...(string(detail.phone) ? { phone: string(detail.phone) } : {}),
-    ...(normalizeGlinkHotelStars(detail.hotelStar, detail.starRating, detail.hotelStarName) !== undefined
-      ? { stars: normalizeGlinkHotelStars(detail.hotelStar, detail.starRating, detail.hotelStarName) }
-      : {}),
+    ...(string(detail.telephone, string(detail.phone)) ? { phone: string(detail.telephone, string(detail.phone)) } : {}),
+    ...(string(detail.openingDate) ? { openingDate: string(detail.openingDate) } : {}),
+    ...(string(detail.fitmentDate) ? { renovatedDate: string(detail.fitmentDate) } : {}),
+    ...(optionalNumber(detail.roomNum) !== undefined ? { numberOfRooms: optionalNumber(detail.roomNum) } : {}),
+    ...(hotelStar || {}),
     ...(optionalNumber(comment.averageScore) !== undefined ? { rating: optionalNumber(comment.averageScore) } : {}),
     ...(string(comment.source) ? { ratingSource: string(comment.source) } : {}),
     ...(plainText(detail.hotelIntroduce) ? { introduction: plainText(detail.hotelIntroduce) } : {}),
     ...(string(detail.checkInTime) ? { checkInTime: string(detail.checkInTime) } : {}),
     ...(string(detail.checkInLateTime) ? { checkInLateTime: string(detail.checkInLateTime) } : {}),
     ...(string(detail.checkOutTime) ? { checkOutTime: string(detail.checkOutTime) } : {}),
+    ...(Object.keys(record(detail.popularFacility)).length ? { popularFacilities } : {}),
+    ...(rooms.length ? { rooms } : {}),
     facilities,
     images,
     importantNotices: array(detail.importantNotices).map(record).map(item => plainText(item.informText)).filter(Boolean),
@@ -260,6 +291,7 @@ export interface HotelQuoteContext {
   id: string;
   hotelId: number;
   hotelName: string;
+  language?: "zh-CN" | "en-US";
   checkInDate: string;
   checkOutDate: string;
   roomNum: number;
@@ -279,10 +311,14 @@ export interface HotelQuoteContext {
   payAtHotelFeeCurrency?: string;
   bedType?: string;
   bedTypeDescription?: string;
+  windowType?: number;
   breakfast?: string;
+  breakfastIncluded?: boolean;
   cancelPolicy?: string;
+  cancellationPolicyDetails?: HotelCancellationPolicyDetails;
   cancelRestrictionType?: number;
   nonRefundable?: boolean;
+  freeCancellation?: boolean;
   checkInInstructions?: string;
   specialCheckInInstructions?: string[];
   priceBreakdown?: HotelPriceBreakdown;
@@ -294,6 +330,8 @@ export interface HotelQuoteContext {
   rating?: number;
   ratingSource?: string;
   stars?: number;
+  starCode?: number;
+  starDescription?: string;
   image?: string;
   tags?: string[];
   lowestPriceVerifiedAt?: string;
@@ -348,6 +386,28 @@ const cancellationDescription = (product: JsonRecord): string => {
   if (type === 3) return cutoff ? `${cutoff} 后不可取消或更改` : "超过取消时限后不可取消或更改";
   if (type === 4) return "可免费取消";
   return "";
+};
+
+const cancellationPolicyDetails = (product: JsonRecord): HotelCancellationPolicyDetails | undefined => {
+  const cancelRestrictionType = optionalNumber(product.cancelRestrictionType);
+  const cancelRestrictionDay = optionalNumber(product.cancelRestrictionDay);
+  const cancelRestrictionTime = string(product.cancelRestrictionTime);
+  const freeCancellationDateTime = string(product.freeCancellationDateTime);
+  const cancelPenalties = array(product.cancelPenalties).map(record).map(item => ({
+    ...(optionalNumber(item.penaltiesType) !== undefined ? { penaltiesType: optionalNumber(item.penaltiesType) } : {}),
+    ...(string(item.startDate) ? { startDate: string(item.startDate) } : {}),
+    ...(string(item.endData, string(item.endDate)) ? { endDate: string(item.endData, string(item.endDate)) } : {}),
+    ...(string(item.penaltiesValue) ? { penaltiesValue: string(item.penaltiesValue) } : {}),
+    ...(string(item.currency) ? { currency: string(item.currency) } : {}),
+  }));
+  if (cancelRestrictionType === undefined && cancelRestrictionDay === undefined && !cancelRestrictionTime && !freeCancellationDateTime && !cancelPenalties.length) return undefined;
+  return {
+    ...(cancelRestrictionType !== undefined ? { cancelRestrictionType } : {}),
+    ...(cancelRestrictionDay !== undefined ? { cancelRestrictionDay } : {}),
+    ...(cancelRestrictionTime ? { cancelRestrictionTime } : {}),
+    ...(freeCancellationDateTime ? { freeCancellationDateTime } : {}),
+    cancelPenalties,
+  };
 };
 
 const productPriceBreakdown = (product: JsonRecord, currency: string, total: number): HotelPriceBreakdown => {
@@ -671,7 +731,7 @@ export async function searchGlinkHotels(
     const detail = details.get(string(row.hotelId)) ?? {};
     const comment = record(array(detail.comment)[0] ?? detail.comment);
     const upstreamRating = optionalNumber(row.hotelScore) ?? optionalNumber(comment.averageScore);
-    const stars = normalizeGlinkHotelStars(
+    const hotelStar = resolveGlinkHotelStar(
       row.hotelStar,
       detail.hotelStar,
       row.starRating,
@@ -697,6 +757,7 @@ export async function searchGlinkHotels(
       id: `GH-${hotelId}-${randomUUID()}`,
       hotelId,
       hotelName,
+      language,
       checkInDate: input.checkIn,
       checkOutDate: input.checkOut,
       roomNum: input.rooms || 1,
@@ -712,7 +773,7 @@ export async function searchGlinkHotels(
       district,
       ...(rating !== undefined ? { rating } : {}),
       ...(string(comment.source) ? { ratingSource: string(comment.source) } : {}),
-      ...(stars !== undefined ? { stars } : {}),
+      ...(hotelStar || {}),
       ...(image ? { image } : {}),
       tags: [
         ...array(row.hotelLabelNameList).map(label => string(label)).filter(Boolean),
@@ -742,6 +803,8 @@ export async function searchGlinkHotels(
       ...(quote.rating !== undefined ? { rating: quote.rating } : {}),
       ...(quote.ratingSource ? { ratingSource: quote.ratingSource } : {}),
       ...(quote.stars !== undefined ? { stars: quote.stars } : {}),
+      ...(quote.starCode !== undefined ? { starCode: quote.starCode } : {}),
+      ...(quote.starDescription ? { starDescription: quote.starDescription } : {}),
       ...(quote.image ? { image: quote.image } : {}),
       tags: quote.tags || [],
       roomName: language === "en-US" ? "View real-time room types" : "进入详情查看实时房型",
@@ -783,6 +846,16 @@ function mapGlinkProduct(
   const total = number(selectedProduct.totalSalePrice, priceItems.reduce((sum, item) => sum + item.salePrice, 0));
   const currency = string(selectedProduct.currency, string(rawPriceItems[0]?.currency, quote.currency));
   const cancelRestrictionType = optionalNumber(selectedProduct.cancelRestrictionType);
+  const structuredCancellationPolicy = cancellationPolicyDetails(selectedProduct);
+  const breakfastName = string(selectedProduct.breakfastName);
+  const breakfastCounts = [optionalNumber(selectedProduct.breakfastNum), ...rawPriceItems.map(item => optionalNumber(item.breakfastNum))]
+    .filter((value): value is number => value !== undefined);
+  const breakfastIncluded = breakfastCounts.length
+    ? breakfastCounts.some(value => value > 0)
+    : breakfastName
+      ? !/(no breakfast|without breakfast|无早|無早|不含早|不含早餐)/i.test(breakfastName)
+      : undefined;
+  const freeCancellation = cancelRestrictionType !== undefined && [2, 3, 4].includes(cancelRestrictionType);
   const productInstructions = productSpecialInstructions(selectedProduct);
   const allInstructions = [...(quote.specialCheckInInstructions || []), ...productInstructions]
     .filter((value, index, all) => all.indexOf(value) === index);
@@ -804,12 +877,15 @@ function mapGlinkProduct(
     ...(string(selectedProduct.payAtHotelFeeCurrency) ? { payAtHotelFeeCurrency: string(selectedProduct.payAtHotelFeeCurrency) } : {}),
     bedType: string(selectedProduct.bedType),
     bedTypeDescription: productBedDescription(selectedProduct)
-      || string(selectedProduct.bedType)
-      || string(selectedRoom.roomName),
-    breakfast: string(selectedProduct.breakfastName),
+      || string(selectedProduct.bedType),
+    ...(optionalNumber(selectedProduct.windowType) !== undefined ? { windowType: optionalNumber(selectedProduct.windowType) } : {}),
+    breakfast: breakfastName,
+    breakfastIncluded,
     cancelPolicy: cancellationDescription(selectedProduct),
+    ...(structuredCancellationPolicy ? { cancellationPolicyDetails: structuredCancellationPolicy } : {}),
     ...(cancelRestrictionType !== undefined ? { cancelRestrictionType } : {}),
     ...(cancelRestrictionType !== undefined ? { nonRefundable: cancelRestrictionType === 1 } : {}),
+    ...(cancelRestrictionType !== undefined ? { freeCancellation } : {}),
     specialCheckInInstructions: allInstructions,
     priceBreakdown: {
       ...initialPriceBreakdown,
@@ -833,15 +909,21 @@ function mapGlinkProduct(
       ...(quote.rating !== undefined ? { rating: quote.rating } : {}),
       ...(quote.ratingSource ? { ratingSource: quote.ratingSource } : {}),
       ...(quote.stars !== undefined ? { stars: quote.stars } : {}),
+      ...(quote.starCode !== undefined ? { starCode: quote.starCode } : {}),
+      ...(quote.starDescription ? { starDescription: quote.starDescription } : {}),
       ...(quote.image ? { image: quote.image } : {}),
       tags: [...(quote.tags || []), "G-Link 实时产品"].slice(0, 6),
       roomName: next.roomName || "实时可订房型",
       ratePlanName: next.ratePlanName,
       breakfast: next.breakfast || "上游未返回早餐信息",
+      ...(next.breakfastIncluded !== undefined ? { breakfastIncluded: next.breakfastIncluded } : {}),
       cancelPolicy: next.cancelPolicy || "上游未返回取消政策",
+      ...(next.cancellationPolicyDetails ? { cancellationPolicyDetails: next.cancellationPolicyDetails } : {}),
       ...(next.bedTypeDescription ? { bedTypeDescription: next.bedTypeDescription } : {}),
+      ...(next.windowType !== undefined ? { windowType: next.windowType } : {}),
       ...(next.cancelRestrictionType !== undefined ? { cancelRestrictionType: next.cancelRestrictionType } : {}),
       ...(next.nonRefundable !== undefined ? { nonRefundable: next.nonRefundable } : {}),
+      ...(next.freeCancellation !== undefined ? { freeCancellation: next.freeCancellation } : {}),
       ...(next.checkInInstructions ? { checkInInstructions: next.checkInInstructions } : {}),
       ...(next.specialCheckInInstructions?.length ? { specialCheckInInstructions: next.specialCheckInInstructions } : {}),
       payAtHotel: next.payAtHotelFlag === 1,
@@ -871,7 +953,7 @@ function mapGlinkProduct(
 export async function hydrateGlinkProducts(
   client: FcgClient,
   quote: HotelQuoteContext,
-  options: { paymentType?: "prepaid" | "payAtHotel" } = {},
+  options: { paymentType?: "prepaid" | "payAtHotel"; language?: "zh-CN" | "en-US" } = {},
 ) {
   const data = record(await client.glink<unknown>("/booking/productDetails", {
     hotelId: quote.hotelId,
@@ -882,7 +964,7 @@ export async function hydrateGlinkProducts(
     numberOfChildren: quote.numberOfChildren || 0,
     ...(quote.numberOfChildren ? { childrenAges: (quote.childrenAges || []).join(",") } : {}),
     nationality: "CN",
-    language: "zh-CN",
+    language: options.language ?? quote.language ?? "en-US",
   }));
   if (!Object.keys(data).length) throw new GlinkNoProductError("EMPTY_RESPONSE");
 
@@ -916,7 +998,7 @@ export async function hydrateGlinkProducts(
 export async function hydrateGlinkProduct(
   client: FcgClient,
   quote: HotelQuoteContext,
-  options: { paymentType?: "prepaid" | "payAtHotel" } = {},
+  options: { paymentType?: "prepaid" | "payAtHotel"; language?: "zh-CN" | "en-US" } = {},
 ) {
   return (await hydrateGlinkProducts(client, quote, options))[0];
 }
@@ -935,7 +1017,7 @@ export async function checkGlinkAvailability(client: FcgClient, quote: HotelQuot
     numberOfChildren: quote.numberOfChildren || 0,
     ...(quote.numberOfChildren ? { childrenAges: (quote.childrenAges || []).join(",") } : {}),
     nationality: "CN",
-    language: "zh-CN",
+    language: quote.language ?? "en-US",
   }));
   if (number(data.canBook) !== 1) throw new Error("实时验房失败：当前房型不可预订");
   return data;
