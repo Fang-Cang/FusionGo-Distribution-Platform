@@ -218,6 +218,13 @@ export async function searchFlinkFlightDestinations(
   );
 }
 
+const normalizeGlinkImages = (value: unknown) => array(value).map(record)
+  .map((image, index) => ({ image, index }))
+  .sort((left, right) => Number(number(right.image.isMain) === 1) - Number(number(left.image.isMain) === 1)
+    || left.index - right.index)
+  .map(({ image }) => string(image.url, string(image.orgImageUrl, string(image.imageUrl))).replace(/^http:\/\//, "https://"))
+  .filter((url, index, all) => Boolean(url) && all.indexOf(url) === index);
+
 export class GlinkNoProductError extends Error {
   constructor(readonly reason: "EMPTY_RESPONSE" | "NO_BOOKABLE_PRODUCT") {
     super(reason === "EMPTY_RESPONSE"
@@ -246,15 +253,18 @@ export async function queryGlinkHotelBasicInfo(
   const comment = record(array(detail.comment)[0] ?? detail.comment);
   const imageData = record(imageResponse);
   const imageGroup = record(array(imageData.hotelImages)[0] ?? imageData);
-  const images = array(imageGroup.images).map(record)
-    .map(image => string(image.url, string(image.orgImageUrl, string(image.imageUrl))).replace(/^http:\/\//, "https://"))
-    .filter((url, index, all) => Boolean(url) && all.indexOf(url) === index);
+  const images = normalizeGlinkImages(imageGroup.images);
+  const roomImages = new Map(array(imageGroup.roomImages).map(record).map(room => [
+    string(room.roomId),
+    normalizeGlinkImages(room.images),
+  ] as const));
   const facilities = array(detail.facility).map(record)
     .filter(item => string(item.categoryType) !== "2" && number(item.status, 1) !== 0)
     .map(item => string(item.name)).filter((name, index, all) => Boolean(name) && all.indexOf(name) === index);
   const popularFacilities = normalizeGlinkPopularFacilities(detail.popularFacility);
   const rooms = array(detail.roomInfos).map(record).map(room => ({
     roomId: number(room.roomId),
+    ...(roomImages.get(string(room.roomId))?.length ? { images: roomImages.get(string(room.roomId)) } : {}),
     ...(optionalNumber(room.isAllowSmoking) !== undefined ? { smokingPolicy: optionalNumber(room.isAllowSmoking) } : {}),
     ...(string(room.roomAcreage) ? { roomArea: string(room.roomAcreage) } : {}),
     ...(string(room.roomFloor) ? { roomFloor: string(room.roomFloor) } : {}),

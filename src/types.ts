@@ -209,6 +209,7 @@ export type HotelPopularFacilityCode = typeof HOTEL_POPULAR_FACILITY_CODES[numbe
 
 export interface HotelRoomInfo {
   roomId: number | string;
+  images?: string[];
   smokingPolicy?: number;
   roomArea?: string;
   roomFloor?: string;

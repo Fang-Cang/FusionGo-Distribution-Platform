@@ -1463,10 +1463,11 @@ function HotelDetail({ listing, offers, productsLoading, hotelDetail, locale, on
       <div className="room-offer-list">{productsLoading ? <div className="room-products-state glass glass-light" role="status" aria-live="polite"><LoaderCircle className="spinner" size={28} /><h2>{locale === "en" ? "Loading available rooms" : locale === "zh-TW" ? "正在查詢可售房型" : "正在查询可售房型"}</h2><p>{locale === "en" ? "Real-time products are being retrieved for the selected dates." : locale === "zh-TW" ? "正在取得所選日期的即時產品。" : "正在获取所选日期的实时产品。"}</p></div> : roomGroups.length ? roomGroups.map((group, groupIndex) => {
         const roomOffer = group.room;
         const roomInfo = hotelDetail?.rooms?.find(room => String(room.roomId) === String(roomOffer.roomId));
+        const roomImage = roomInfo?.images?.[0] || roomOffer.image;
         const roomFacts = hotelRoomFacts(roomOffer, roomInfo, locale);
         return <section className="room-offer glass glass-light" key={group.key}>
           <div className="room-summary">
-            <div className="room-photo">{roomOffer.image ? <img src={roomOffer.image} alt={roomOffer.roomName} /> : <div className="hotel-image-placeholder"><Building2 size={25} /><span>No room image from supplier</span></div>}<span className="room-photo-index">{String(groupIndex + 1).padStart(2, "0")}</span></div>
+            <div className="room-photo">{roomImage ? <img src={roomImage} alt={roomOffer.roomName} /> : <div className="hotel-image-placeholder"><Building2 size={25} /><span>No room image from supplier</span></div>}<span className="room-photo-index">{String(groupIndex + 1).padStart(2, "0")}</span></div>
             <h2>{roomOffer.roomName}</h2>
             {roomFacts.length > 0 && <ul>{roomFacts.map(({ key, label, Icon }) => <li key={key}><Icon size={16} />{label}</li>)}</ul>}
           </div>

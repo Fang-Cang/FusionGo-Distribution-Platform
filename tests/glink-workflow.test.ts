@@ -139,11 +139,18 @@ describe("G-Link mandatory hotel workflow", () => {
   it("maps hotel basic information and images for the detail page", async () => {
     const { client, calls } = stubClient({
       "/hotel/detail": { hotelInfos: [{ hotelId: 10583772, hotelName: "深圳真实酒店", cityName: "深圳", distinctName: "南山区", address: "测试路 1 号", telephone: "+86-755-88888888", openingDate: "2018-06-01", fitmentDate: "2023-01-15", roomNum: 445, hotelStar: "5星", hotelIntroduce: "<p>酒店简介</p>", checkInTime: "14:00", checkOutTime: "12:00", comment: [{ averageScore: "4.6", source: "G-Link" }], popularFacility: { freeWiFi: "1", parkingLot: "1", bar: "0" }, facility: [{ categoryType: "1", status: 1, name: "健身中心" }], roomInfos: [{ roomId: 52047428, isAllowSmoking: 2, roomAcreage: "45", roomFloor: "1", windowDetail: 2, wirelessBroadband: 2 }], importantNotices: [{ informText: "入住须知" }] }] },
-      "/hotel/images": { hotelImages: [{ hotelId: 10583772, images: [{ isMain: 1, url: "http://example.com/main.jpg" }] }] },
+      "/hotel/images": { hotelImages: [{ hotelId: 10583772, images: [
+        { isMain: 0, url: "http://example.com/gallery-1.jpg" },
+        { isMain: 1, url: "http://example.com/main.jpg" },
+        { isMain: 0, url: "http://example.com/gallery-2.jpg" },
+      ], roomImages: [{ roomId: 52047428, images: [
+        { isMain: 0, url: "http://example.com/room-gallery.jpg" },
+        { isMain: 1, url: "http://example.com/room-main.jpg" },
+      ] }] }] },
     });
 
     const detail = await queryGlinkHotelBasicInfo(client, 10583772, "en-US");
-    expect(detail).toMatchObject({ name: "深圳真实酒店", address: "测试路 1 号", phone: "+86-755-88888888", openingDate: "2018-06-01", renovatedDate: "2023-01-15", numberOfRooms: 445, stars: 5, rating: 4.6, popularFacilities: ["freeWiFi", "parkingLot"], rooms: [{ roomId: 52047428, smokingPolicy: 2, roomArea: "45", roomFloor: "1", windowType: 2, wirelessBroadband: 2 }], facilities: ["健身中心"], images: ["https://example.com/main.jpg"] });
+    expect(detail).toMatchObject({ name: "深圳真实酒店", address: "测试路 1 号", phone: "+86-755-88888888", openingDate: "2018-06-01", renovatedDate: "2023-01-15", numberOfRooms: 445, stars: 5, rating: 4.6, popularFacilities: ["freeWiFi", "parkingLot"], rooms: [{ roomId: 52047428, images: ["https://example.com/room-main.jpg", "https://example.com/room-gallery.jpg"], smokingPolicy: 2, roomArea: "45", roomFloor: "1", windowType: 2, wirelessBroadband: 2 }], facilities: ["健身中心"], images: ["https://example.com/main.jpg", "https://example.com/gallery-1.jpg", "https://example.com/gallery-2.jpg"] });
     expect(detail.introduction).toBe("酒店简介");
     expect(calls.find(call => call.path === "/hotel/detail")?.body.language).toBe("en-US");
     expect(calls.map(call => call.path)).toEqual(["/hotel/detail", "/hotel/images"]);
