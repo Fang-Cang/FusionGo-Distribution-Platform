@@ -1345,9 +1345,9 @@ const hotelRoomFacts = (offer: HotelOffer, room: HotelRoomInfo | undefined, loca
   return facts;
 };
 
-function HotelDetail({ offers, hotelDetail, locale, onBack, onCheckout, onUpdateSearch, favorite, favoriteBusy, onToggleFavorite, authenticated, onLoginRequired }: { offers: HotelOffer[]; hotelDetail?: HotelBasicInfo; locale: LocaleCode; onBack: () => void; onCheckout: (offer: HotelOffer, availability: Partial<HotelOffer> & { price: number; currency: string }) => void; onUpdateSearch: (query: HotelStayQuery) => Promise<void>; favorite: boolean; favoriteBusy: boolean; onToggleFavorite: () => void; authenticated: boolean; onLoginRequired: () => void }) {
+function HotelDetail({ listing, offers, productsLoading, hotelDetail, locale, onBack, onCheckout, onUpdateSearch, favorite, favoriteBusy, onToggleFavorite, authenticated, onLoginRequired }: { listing: HotelOffer; offers: HotelOffer[]; productsLoading: boolean; hotelDetail?: HotelBasicInfo; locale: LocaleCode; onBack: () => void; onCheckout: (offer: HotelOffer, availability: Partial<HotelOffer> & { price: number; currency: string }) => void; onUpdateSearch: (query: HotelStayQuery) => Promise<void>; favorite: boolean; favoriteBusy: boolean; onToggleFavorite: () => void; authenticated: boolean; onLoginRequired: () => void }) {
   const { money } = useDisplayMoney();
-  const offer = offers[0];
+  const offer = offers[0] ?? listing;
   const hotelName = hotelDetail?.name || offer.name;
   const detailImages = hotelDetail?.images.length ? hotelDetail.images : offer.image ? [offer.image] : [];
   const roomGroups = useMemo(() => {
@@ -1460,7 +1460,7 @@ function HotelDetail({ offers, hotelDetail, locale, onBack, onCheckout, onUpdate
     </form>
     {error && <p className="error-copy stay-query-error" role="alert">{error}</p>}
     <div className="hotel-detail-layout without-rating"><div>
-      <div className="room-offer-list">{roomGroups.map((group, groupIndex) => {
+      <div className="room-offer-list">{productsLoading ? <div className="room-products-state glass glass-light" role="status" aria-live="polite"><LoaderCircle className="spinner" size={28} /><h2>{locale === "en" ? "Loading available rooms" : locale === "zh-TW" ? "正在查詢可售房型" : "正在查询可售房型"}</h2><p>{locale === "en" ? "Real-time products are being retrieved for the selected dates." : locale === "zh-TW" ? "正在取得所選日期的即時產品。" : "正在获取所选日期的实时产品。"}</p></div> : roomGroups.length ? roomGroups.map((group, groupIndex) => {
         const roomOffer = group.room;
         const roomInfo = hotelDetail?.rooms?.find(room => String(room.roomId) === String(roomOffer.roomId));
         const roomFacts = hotelRoomFacts(roomOffer, roomInfo, locale);
@@ -1499,9 +1499,9 @@ function HotelDetail({ offers, hotelDetail, locale, onBack, onCheckout, onUpdate
             </article>;
           })}</div>
         </section>;
-      })}</div>
+      }) : <div className="room-products-state empty glass glass-light" role="status"><CalendarDays size={30} /><h2>{locale === "en" ? "No products are available for the selected dates" : locale === "zh-TW" ? "目前日期沒有產品，可以更換日期查詢" : "当前日期没有产品，可以换个日期查询"}</h2><p>{locale === "en" ? "Choose different check-in and check-out dates above, then update the search." : locale === "zh-TW" ? "請在上方更換入住和退房日期後重新查詢。" : "请在上方更换入住和退房日期后重新查询。"}</p></div>}</div>
     </div></div>
-    <section className="accomy-info-section" id="facilities"><div className="section-heading"><h2>Hotel Facilities</h2></div><div className="facility-grid glass glass-light">{(hotelDetail?.facilities.length ? hotelDetail.facilities : offer.tags).map(item => <span key={item}><CheckCircle2 size={16} />{item}</span>)}</div></section>
+    <section className="accomy-info-section" id="facilities"><div className="section-heading"><h2>Hotel Facilities</h2></div><div className="facility-grid glass glass-light">{(hotelDetail?.facilities.length ? hotelDetail.facilities : offer.tags).map((item, index) => <span key={`${item}-${index}`}><CheckCircle2 size={16} />{item}</span>)}</div></section>
     <section className="accomy-info-section" id="about"><div className="section-heading"><h2>Hotel Information</h2></div><div className="about-hotel-grid">
       <div className="about-facts glass glass-light">
         <div><small>Opening Date</small><strong>{hotelDetail?.openingDate || "--"}</strong></div>
@@ -1638,6 +1638,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
   const [mapOpen, setMapOpen] = useState(false);
   const [selection, setSelection] = useState<HotelOffer>();
   const [roomOffers, setRoomOffers] = useState<HotelOffer[]>([]);
+  const [roomProductsLoading, setRoomProductsLoading] = useState(false);
   const [selectedListing, setSelectedListing] = useState<HotelOffer>();
   const [hotelDetail, setHotelDetail] = useState<HotelBasicInfo>();
   const [hydratingId, setHydratingId] = useState("");
@@ -1650,6 +1651,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
   const destinationInputRef = useRef<HTMLInputElement>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
   const searchSequenceRef = useRef(0);
+  const hotelHydrationSequenceRef = useRef(0);
   const searchAbortRef = useRef<AbortController | undefined>(undefined);
   useEffect(() => {
     const names: Record<string, string> = english
@@ -1975,25 +1977,39 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     return () => observer.disconnect();
   }, [activeHotelSearch, hasMoreHotels, hotelPage, loadMoreError, loading, loadingMore, stage]);
   const chooseHotel = async (hotel: HotelOffer) => {
+    const hydrationSequence = ++hotelHydrationSequenceRef.current;
     setHydratingId(hotel.id);
     setSuggestionsOpen(false);
     setError("");
-    try {
-      const [products, detail] = await Promise.all([
-        api.getHotelProducts(hotel.id, english ? "en-US" : "zh-CN"),
-        hotel.hotelId ? api.getHotelDetail(hotel.hotelId, english ? "en-US" : "zh-CN") : Promise.resolve(undefined),
-      ]);
-      if (!products.length) throw new Error(english ? "Supplier did not return real-time available products" : "Supplier did not return real-time available products");
-      setSelectedListing(hotel);
-      setHotelDetail(detail);
-      setRoomOffers(products);
-      setSelection(products[0]);
-      setStage("detail");
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : english ? "Real-time room query failed" : "Real-time room query failed");
-    } finally {
-      setHydratingId("");
-    }
+    setSelectedListing(hotel);
+    setHotelDetail(undefined);
+    setRoomOffers([]);
+    setSelection(undefined);
+    setRoomProductsLoading(true);
+    setStage("detail");
+
+    const detailRequest = hotel.hotelId
+      ? api.getHotelDetail(hotel.hotelId, english ? "en-US" : "zh-CN")
+        .then(detail => { if (hydrationSequence === hotelHydrationSequenceRef.current) setHotelDetail(detail); })
+        .catch(() => undefined)
+      : Promise.resolve();
+    const productRequest = api.getHotelProducts(hotel.id, english ? "en-US" : "zh-CN")
+      .then(products => {
+        if (hydrationSequence !== hotelHydrationSequenceRef.current) return;
+        setRoomOffers(products);
+        setSelection(products[0]);
+      })
+      .catch(() => {
+        if (hydrationSequence !== hotelHydrationSequenceRef.current) return;
+        setRoomOffers([]);
+        setSelection(undefined);
+      })
+      .finally(() => {
+        if (hydrationSequence !== hotelHydrationSequenceRef.current) return;
+        setRoomProductsLoading(false);
+        setHydratingId("");
+      });
+    await Promise.allSettled([detailRequest, productRequest]);
   };
   const updateHotelStay = async (stay: HotelStayQuery) => {
     if (!selectedListing) throw new Error(english ? "Hotel information is unavailable" : "酒店信息不可用");
@@ -2012,24 +2028,29 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
       page: 1,
       pageSize: 10,
     };
-    const result = await api.searchHotelsPage(query);
-    const refreshedListing = result.items.find(item => String(item.hotelId) === String(selectedListing.hotelId)) ?? result.items[0];
-    if (!refreshedListing) throw new Error(english ? "This hotel has no availability for the selected stay" : "该酒店在所选入住条件下暂无可用房型");
-    const products = await api.getHotelProducts(refreshedListing.id, english ? "en-US" : "zh-CN");
-    if (!products.length) throw new Error(english ? "Supplier did not return real-time available products" : "供应商未返回实时可售房型");
-    setCheckIn(stay.checkIn);
-    setCheckOut(stay.checkOut);
-    setRooms(stay.rooms);
-    setAdults(stay.adults);
-    setChildren(stay.children);
-    setChildAges(stay.childAges);
-    setItems(result.items);
-    setActiveHotelSearch(query);
-    setHotelPage(result.currentPage);
-    setHasMoreHotels(result.hasMore);
-    setSelectedListing(refreshedListing);
-    setRoomOffers(products);
-    setSelection(products[0]);
+    setRoomProductsLoading(true);
+    try {
+      const result = await api.searchHotelsPage(query);
+      const refreshedListing = result.items.find(item => String(item.hotelId) === String(selectedListing.hotelId)) ?? result.items[0];
+      const products = refreshedListing
+        ? await api.getHotelProducts(refreshedListing.id, english ? "en-US" : "zh-CN").catch(() => [])
+        : [];
+      setCheckIn(stay.checkIn);
+      setCheckOut(stay.checkOut);
+      setRooms(stay.rooms);
+      setAdults(stay.adults);
+      setChildren(stay.children);
+      setChildAges(stay.childAges);
+      setItems(result.items);
+      setActiveHotelSearch(query);
+      setHotelPage(result.currentPage);
+      setHasMoreHotels(result.hasMore);
+      if (refreshedListing) setSelectedListing(refreshedListing);
+      setRoomOffers(products);
+      setSelection(products[0]);
+    } finally {
+      setRoomProductsLoading(false);
+    }
   };
   const searchFavoriteHotel = async (hotel: FavoriteHotel) => {
     const arrival = new Date();
@@ -2119,7 +2140,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
     <button type="submit" className="primary search-cta" disabled={loading} aria-busy={loading}>{loading ? <><LoaderCircle className="spinner" size={18} />{english ? "Searching" : "Searching"}</> : <><Search size={18} />{english ? "Search Hotels" : "Search Hotels"}</>}</button>
     {error && <div className="search-inline-error" role="alert"><CircleHelp size={16} /><span>{error}</span><button type="button" onClick={() => void search()}>{english ? "Retry" : "Retry"}</button></div>}
   </form>;
-  if (selection && roomOffers.length && stage === "detail") return <HotelDetail offers={roomOffers} hotelDetail={hotelDetail} locale={locale} favorite={Boolean(selectedListing && findFavoriteHotel(favoriteHotels, selectedListing))} favoriteBusy={favoriteBusyId === selectedListing?.id} onToggleFavorite={() => { if (selectedListing) void toggleFavorite(selectedListing); }} authenticated={authenticated} onLoginRequired={onLoginRequired} onBack={() => setStage("results")} onUpdateSearch={updateHotelStay} onCheckout={(selectedOffer, availability) => { setSelection({ ...selectedOffer, ...availability, totalPrice: availability.price, currency: availability.currency }); setStage("checkout"); }} />;
+  if (selectedListing && stage === "detail") return <HotelDetail listing={selectedListing} offers={roomOffers} productsLoading={roomProductsLoading} hotelDetail={hotelDetail} locale={locale} favorite={Boolean(findFavoriteHotel(favoriteHotels, selectedListing))} favoriteBusy={favoriteBusyId === selectedListing.id} onToggleFavorite={() => { void toggleFavorite(selectedListing); }} authenticated={authenticated} onLoginRequired={onLoginRequired} onBack={() => setStage("results")} onUpdateSearch={updateHotelStay} onCheckout={(selectedOffer, availability) => { setSelection({ ...selectedOffer, ...availability, totalPrice: availability.price, currency: availability.currency }); setStage("checkout"); }} />;
   if (selection && stage === "checkout") return <HotelCheckout offer={selection} onBack={() => setStage("detail")} onComplete={created => { setOrder(created); setStage("result"); }} />;
   if (order && stage === "result") return <BookingResult order={order} type="hotel" onDetails={() => setStage("orderDetail")} onRestart={() => { setSelection(undefined); setRoomOffers([]); setSelectedListing(undefined); setOrder(undefined); setStage("home"); }} />;
   if (order && stage === "orderDetail") return <OrderDetailView initialOrder={order} locale={locale} onOrderChange={setOrder} onBack={() => setStage("result")} onRestart={() => { setSelection(undefined); setRoomOffers([]); setSelectedListing(undefined); setOrder(undefined); setStage("home"); }} />;
@@ -2185,7 +2206,7 @@ function HotelSearch({ locale, authenticated, onLoginRequired }: { locale: Local
           {hotel.image ? <img src={hotel.image} alt="" /> : <div className="hotel-image-placeholder card"><Building2 size={28} /><span>{english ? "No image from supplier" : "No image from supplier"}</span></div>}
           <div className="hotel-info"><div className="hotel-top"><div><h3>{hotel.name}</h3>{hotel.stars !== undefined && <span className="hotel-star-badge" aria-label={english ? `${hotel.stars}-star hotel` : `${hotel.stars} 星级酒店`}><b aria-hidden="true">{"★".repeat(hotel.stars)}</b></span>}{(hotel.district || hotel.distanceKm !== undefined) && <p className="hotel-location-summary">{hotel.district && <span>{hotel.district}</span>}{hotel.distanceKm !== undefined && <span className="hotel-distance"><MapPin size={12} />{hotelTr(`距目的地 ${hotel.distanceKm.toFixed(1)} km`, `${hotel.distanceKm.toFixed(1)} km from destination`, `距目的地 ${hotel.distanceKm.toFixed(1)} km`)}</span>}</p>}</div><div className="hotel-card-actions"><button className={`favorite-button ${findFavoriteHotel(favoriteHotels, hotel) ? "active" : ""}`} onClick={() => void toggleFavorite(hotel)} disabled={favoriteBusyId === hotel.id} aria-pressed={Boolean(findFavoriteHotel(favoriteHotels, hotel))} aria-label={findFavoriteHotel(favoriteHotels, hotel) ? `Remove from Favorites...${hotel.name}` : `Add to Favorites...${hotel.name}`}><Heart size={17} fill={findFavoriteHotel(favoriteHotels, hotel) ? "currentColor" : "none"} /></button>{hotel.rating !== undefined && <span className="rating" aria-label={english ? `Supplier rating ${hotel.rating}` : `供应商评分 ${hotel.rating}`}><strong>{hotel.rating}</strong></span>}</div></div>
           <div className="tags">{hotel.tags.map((tag, index) => <span key={`${tag}-${index}`}>{tag}</span>)}</div>
-          <div className="room-line"><div className="price"><small>per night, tax included</small><strong>{hotel.nightlyPrice ? money(hotel.nightlyPrice, hotel.currency) : "Real-time Query"}</strong>{hotel.nightlyPrice ? <span>{`${hotel.nights || 1} nights × ${hotel.roomNum || 1} rooms, total ${money(hotel.totalPrice ?? hotel.nightlyPrice * (hotel.nights || 1) * (hotel.roomNum || 1), hotel.currency)}`}</span> : null}</div><button className="primary" onClick={() => chooseHotel(hotel)} disabled={hydratingId === hotel.id}>{hydratingId === hotel.id ? <><LoaderCircle className="spinner" size={16} />Search Live Products</> : "Check Availability"}</button></div></div>
+          <div className="room-line"><div className="price"><small>per night, tax included</small><strong>{hotel.nightlyPrice ? money(hotel.nightlyPrice, hotel.currency) : "Real-time Query"}</strong>{hotel.nightlyPrice ? <span>{`${hotel.nights || 1} nights × ${hotel.roomNum || 1} rooms, total ${money(hotel.totalPrice ?? hotel.nightlyPrice * (hotel.nights || 1) * (hotel.roomNum || 1), hotel.currency)}`}</span> : null}</div><button className="primary" onClick={() => chooseHotel(hotel)} disabled={hydratingId === hotel.id}>{hydratingId === hotel.id ? <><LoaderCircle className="spinner" size={16} />{english ? "Loading Rooms" : "正在查询房型"}</> : english ? "View Rooms" : "查看房型"}</button></div></div>
         </article>) : hasSearched && !error ? <div className="hotel-empty-state glass glass-light"><div><Building2 size={28} /></div><h3>{english ? "No hotels match your criteria" : "No hotels match your criteria"}</h3><p>{items.length ? english ? "Please clear or relax some filter criteria." : "Please clear or relax some filter criteria." : english ? "Try a different destination or date..." : "Try a different destination or date..."}</p><button className="primary" onClick={() => { if (items.length) clearHotelFilters(); else setDestination("Hong Kong"); setError(""); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{items.length ? english ? "Clear Filters" : "Clear Filters" : english ? "Search Hong Kong Hotels" : "Search Hong Kong Hotels"}</button></div> : null}
         {!loading && items.length > 0 && hasMoreHotels && <div className="hotel-load-more" ref={loadMoreSentinelRef} aria-live="polite">{loadingMore && <span role="status" aria-label={english ? "Loading more hotels" : "正在加载更多酒店"}><LoaderCircle className="spinner" size={20} /></span>}{loadMoreError && <><p role="alert">{loadMoreError}</p><button className="secondary" type="button" onClick={() => { setLoadMoreError(""); void loadMoreHotels(); }}>{english ? "Retry" : "重试"}</button></>}</div>}
         {!loading && hasSearched && visibleHotels.length > 0 && !hasMoreHotels && !loadMoreError && <div className="hotel-list-end" role="status">
